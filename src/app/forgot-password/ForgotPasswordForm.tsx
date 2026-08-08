@@ -2,6 +2,11 @@
 
 import { useActionState } from 'react'
 import { useFormStatus } from 'react-dom'
+import Link from 'next/link'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { requestPasswordReset, type ForgotState } from './actions'
 
 const initialState: ForgotState = { error: null, submitted: false }
@@ -9,13 +14,9 @@ const initialState: ForgotState = { error: null, submitted: false }
 function SubmitButton() {
   const { pending } = useFormStatus()
   return (
-    <button
-      type="submit"
-      disabled={pending}
-      className="rounded-md bg-cyan-500 px-4 py-2 font-medium text-white hover:bg-cyan-700 disabled:opacity-50"
-    >
+    <Button type="submit" size="lg" className="w-full" disabled={pending}>
       {pending ? 'Submitting…' : 'Submit'}
-    </button>
+    </Button>
   )
 }
 
@@ -24,33 +25,50 @@ export default function ForgotPasswordForm() {
 
   if (state.submitted) {
     return (
-      <p className="text-center">
-        Your password request has been sent. If there is an account associated
-        with this email address you will be emailed instructions on how to reset
-        your password.
-      </p>
+      <div className="grid gap-4">
+        <p className="text-sm text-muted-foreground">
+          Your password request has been sent. If there is an account associated
+          with this email address you will be emailed instructions on how to
+          reset your password.
+        </p>
+        <BackToSignIn />
+      </div>
     )
   }
 
   return (
-    <form action={formAction} className="mt-5 space-y-4">
+    <form action={formAction} className="grid gap-4">
       {state.error && (
-        <p role="alert" className="text-sm text-red-500">
-          {state.error}
-        </p>
+        <Alert variant="destructive">
+          <AlertDescription>{state.error}</AlertDescription>
+        </Alert>
       )}
-      <label htmlFor="email" className="block text-sm font-medium text-gray-700">
-        Email address
-      </label>
-      <input
-        id="email"
-        name="email"
-        type="email"
-        required
-        placeholder="you@example.com"
-        className="block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm"
-      />
+      <p className="text-sm text-muted-foreground">
+        Enter your email address to reset your password.
+      </p>
+      <div className="grid gap-2">
+        <Label htmlFor="email">Email</Label>
+        <Input
+          id="email"
+          name="email"
+          type="email"
+          placeholder="you@alphamd.org"
+          required
+        />
+      </div>
       <SubmitButton />
+      <BackToSignIn />
     </form>
+  )
+}
+
+function BackToSignIn() {
+  return (
+    <Link
+      href="/login"
+      className="text-center text-sm text-muted-foreground underline-offset-4 hover:underline"
+    >
+      Back to sign in
+    </Link>
   )
 }

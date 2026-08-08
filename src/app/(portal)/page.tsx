@@ -14,8 +14,8 @@ export default async function DashboardPage() {
   if (!isAllowedProviderEmail(user.email)) redirect('/login?error=not_authorized')
 
   return (
-    <main className="flex min-h-screen items-center justify-center">
-      <h1 className="text-3xl font-semibold text-gray-900">Temporary dashboard</h1>
+    <main className="flex min-h-screen items-center justify-center bg-muted p-6">
+      <h1 className="text-2xl font-semibold tracking-tight">Temporary dashboard</h1>
     </main>
   )
 }

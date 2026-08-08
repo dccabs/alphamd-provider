@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
+import { AuthShell } from '@/components/auth-shell'
 import ResetPasswordForm from './ResetPasswordForm'
 
 export const metadata = { title: 'Reset password | Alpha MD Provider' }
@@ -12,23 +13,28 @@ export default async function ResetPasswordPage() {
 
   if (!user) {
     return (
-      <main className="mx-auto mt-36 max-w-md px-4 text-center">
-        <p>This password reset link is invalid or has expired.</p>
-        <Link href="/forgot-password" className="font-medium text-cyan-700">
-          Request a new link
-        </Link>
-      </main>
+      <AuthShell title="Link expired">
+        <div className="grid gap-4">
+          <p className="text-sm text-muted-foreground">
+            This password reset link is invalid or has expired.
+          </p>
+          <Link
+            href="/forgot-password"
+            className="text-center text-sm text-muted-foreground underline-offset-4 hover:underline"
+          >
+            Request a new link
+          </Link>
+        </div>
+      </AuthShell>
     )
   }
 
   return (
-    <main className="mx-auto mt-16 w-full max-w-md px-4">
-      <h1 className="text-center text-3xl font-extrabold text-gray-900">
-        Reset Password
-      </h1>
-      <div className="mt-8 rounded-lg bg-white px-4 py-8 shadow sm:px-10">
-        <ResetPasswordForm />
-      </div>
-    </main>
+    <AuthShell
+      title="Set a new password"
+      description="Choose a password with at least 8 characters."
+    >
+      <ResetPasswordForm />
+    </AuthShell>
   )
 }

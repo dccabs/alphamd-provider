@@ -3,18 +3,19 @@
 import { useActionState, useState } from 'react'
 import { useFormStatus } from 'react-dom'
 import Link from 'next/link'
+import { Eye, EyeOff } from 'lucide-react'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { login } from './actions'
 
 function SubmitButton() {
   const { pending } = useFormStatus()
   return (
-    <button
-      type="submit"
-      disabled={pending}
-      className="w-full rounded-md bg-red-500 px-4 py-2 font-medium text-white hover:bg-red-700 disabled:opacity-50"
-    >
+    <Button type="submit" size="lg" className="w-full" disabled={pending}>
       {pending ? 'Signing in…' : 'Sign in'}
-    </button>
+    </Button>
   )
 }
 
@@ -29,52 +30,55 @@ export default function LoginForm({
   const [showPassword, setShowPassword] = useState(false)
 
   return (
-    <form action={formAction} className="mt-8 space-y-6">
+    <form action={formAction} className="grid gap-4">
       <input type="hidden" name="redirect" value={redirectTo} />
       {state.error && (
-        <p role="alert" className="rounded-md bg-yellow-50 p-4 text-sm text-yellow-800">
-          {state.error}
-        </p>
+        <Alert variant="destructive">
+          <AlertDescription>{state.error}</AlertDescription>
+        </Alert>
       )}
-      <div>
-        <label htmlFor="email" className="block text-sm font-medium text-gray-700">
-          Email address
-        </label>
-        <input
+      <div className="grid gap-2">
+        <Label htmlFor="email">Email</Label>
+        <Input
           id="email"
           name="email"
           type="email"
           autoComplete="email"
+          placeholder="you@alphamd.org"
           required
-          className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 shadow-sm"
         />
       </div>
-      <div>
-        <label htmlFor="password" className="block text-sm font-medium text-gray-700">
-          Password
-        </label>
-        <div className="relative mt-1">
-          <input
+      <div className="grid gap-2">
+        <div className="flex items-center justify-between">
+          <Label htmlFor="password">Password</Label>
+          <Link
+            href="/forgot-password"
+            className="text-sm text-muted-foreground underline-offset-4 hover:underline"
+          >
+            Forgot your password?
+          </Link>
+        </div>
+        <div className="relative">
+          <Input
             id="password"
             name="password"
             type={showPassword ? 'text' : 'password'}
             autoComplete="current-password"
             required
-            className="block w-full rounded-md border border-gray-300 px-3 py-2 pr-10 shadow-sm"
+            className="pr-9"
           />
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="icon-sm"
             onClick={() => setShowPassword((v) => !v)}
             aria-label={showPassword ? 'Hide password' : 'Show password'}
-            className="absolute inset-y-0 right-0 px-3 text-sm text-gray-500"
+            className="absolute inset-y-0 right-1 my-auto text-muted-foreground"
           >
-            {showPassword ? 'Hide' : 'Show'}
-          </button>
+            {showPassword ? <EyeOff /> : <Eye />}
+          </Button>
         </div>
       </div>
-      <Link href="/forgot-password" className="block text-sm font-medium text-cyan-700">
-        Forgot your password?
-      </Link>
       <SubmitButton />
     </form>
   )

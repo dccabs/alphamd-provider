@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { isAllowedProviderEmail } from '@/lib/allowedEmail'
 import { safeRedirectPath } from '@/lib/safeRedirect'
+import { AuthShell } from '@/components/auth-shell'
 import LoginForm from './LoginForm'
 
 export const metadata = { title: 'Sign in | Alpha MD Provider' }
@@ -28,14 +29,14 @@ export default async function LoginPage({
   const redirectTo = safeRedirectPath(redirectParam)
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-md flex-col justify-center px-6">
-      <h1 className="text-center text-3xl font-extrabold text-gray-900">
-        Sign in to your account
-      </h1>
+    <AuthShell
+      title="Sign in"
+      description="Use your Alpha MD account to access the provider portal."
+    >
       <LoginForm
         redirectTo={redirectTo}
         initialError={(error && ERROR_MESSAGES[error]) || null}
       />
-    </main>
+    </AuthShell>
   )
 }

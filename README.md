@@ -3,9 +3,10 @@
 The provider-facing portal for Alpha MD. This is the beginning of migrating
 provider tasks out of the main app's `/admin` section.
 
-Next.js 16 (App Router) + Supabase + Vercel. It shares the **same Supabase
-project** as [`dccabs/alphamd`](https://github.com/dccabs/alphamd), so accounts
-and passwords are the same — but only `@alphamd.org` addresses can sign in here.
+Next.js 16 (App Router) + Supabase + Vercel, with stock shadcn/ui for the
+interface. It shares the **same Supabase project** as
+[`dccabs/alphamd`](https://github.com/dccabs/alphamd), so accounts and passwords
+are the same — but only `@alphamd.org` addresses can sign in here.
 
 Current scope is login only: sign in, forgot password, reset password, and a
 placeholder dashboard.
@@ -73,6 +74,12 @@ untouched.
 
 - App Router, Server Components by default; the three forms are client
   components driven by Server Actions.
+- UI is stock **shadcn/ui** (`base-nova` preset — Base UI primitives, Lucide
+  icons, Geist, neutral theme). Components live in `src/components/ui` and are
+  owned by this repo; add more with `npx shadcn@latest add <name>`. This is a
+  deliberate fresh start — do **not** port the main app's palette or
+  components across. Note Base UI uses a `render` prop rather than Radix's
+  `asChild`.
 - Supabase access goes through `@supabase/ssr` (`src/lib/supabase/*`), not the
   deprecated `@supabase/auth-helpers-*` that the main app still uses.
 - Request-level auth lives in `src/proxy.ts`. Next 16 deprecates the
