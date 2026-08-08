@@ -12,12 +12,9 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
+/* Light-only for now: the auth screens use fixed light Tailwind colours
+   (text-gray-900 on white cards), so honouring prefers-color-scheme here
+   would render dark text on a dark background. Revisit with a real theme. */
 
 body {
   background: var(--background);
