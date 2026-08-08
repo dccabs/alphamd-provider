@@ -57,10 +57,57 @@ pnpm refuses to run dependency install scripts until each is explicitly allowed
 in `pnpm-workspace.yaml`, and fails the install on anything unlisted. If a new
 dependency trips that, add it there rather than working around it.
 
+## Lab reviews
+
+`/lab-reviews` is the provider queue; `/lab-reviews/[id]` is the review screen.
+Both are gated a second time, beyond the sign-in domain rule: you also need the
+`provider` or `admin` role. Anyone else who can sign in gets an explicit "no lab
+review access" message rather than an empty page.
+
+**Roles are read from `user_roles_join`, never `user_list.role`.** That legacy
+single-value column has zero `'provider'` rows in production, which is why the
+main app's `requireStaff()` 403s real providers. `brandons@alphamd.org` — a
+provider whose `user_list.role` is `''` — is the regression test for this.
+
+For the same reason, lab-review data is read with the **service-role key** and
+authorized in application code. Every relevant RLS policy checks that same dead
+column, so reading through RLS returns empty arrays instead of errors. The key
+lives in one `server-only` module (`src/lib/supabase/admin.ts`), an ESLint rule
+bans importing it from client components, and the build is grepped to confirm it
+never reaches the browser bundle.
+
+### Not yet wired to real data
+
+Everything on the screen is live except the following, and each one is visibly
+marked in the UI. **An unlabelled static region is a bug.**
+
+| What | Why | What unblocks it |
+| --- | --- | --- |
+| Review modal (protocol decision, dose change, new medications, concerns, CS instructions, Save draft, Finalize) | `lab_reviews` has only a free-text `resolution` column — no structured outcome and no draft state | A `lab_review_outcomes` table. The modal is interactive so the interaction can be reviewed, behind a "Draft only — not saved" banner. |
+| Assign, Mark complete, More actions | Writes; they map to columns that already exist (`assigned_to`, `status`, `resolution`) | The next change. Labelled "Next change" in the menu. |
+| Assign instructions textarea | No column exists for it | An `assigned_note` column. Rendered **disabled** rather than accepting clinical text it would discard. |
+| "Generate new protocol" | Not traced to an implementation in the main app | Reading the real flow before wiring it. Labelled "Not wired". |
+| Up/down arrows on the AI chips | The extracted JSON stores display strings with no reference interval and no H/L flag, and there is no reference-range table anywhere in the database | Extending the extraction prompt to capture the range the lab report already prints. Chips ship without arrows rather than hardcoding clinical thresholds in front-end code. |
+| Billing tab | Dropped from this iteration | Next iteration: `transactions_v4` plus an unpaid-balance flag. Note `collection_status` is the dunning state, not the payment state — 8,280 paid invoices read `pending`. |
+
+### Known rough edges
+
+- **PDF page controls duplicate the browser's own.** Chrome and Firefox render
+  embedded PDFs with their own toolbar, so there are two sets of page/zoom
+  controls. Ours drive the browser viewer through the `#page=` fragment and do
+  work. Removing the duplication needs a bundled renderer (pdf.js), which is a
+  bigger change than this one.
+- **Some files are mislabelled at rest.** At least one `.pdf` in the bucket is
+  actually HTML — a broken upload, and the subject of that patient's own CS
+  thread. Classification is by extension, so such a file will open blank.
+- CS comments are mirrored Zendesk emails, so they include signatures and
+  confidentiality footers. They are rendered in full; truncating patient
+  communications silently would be worse.
+
 ## Environment variables
 
-See `.env.example`. There is deliberately **no service-role key** — the access
-gate reads no tables, so this deployment never needs one.
+See `.env.example`. `SUPABASE_SECRET_KEY` is required for `/lab-reviews`;
+`ZENDESK_API_TOKEN` is required only to send a customer-service reply.
 
 ## Deployment notes
 
