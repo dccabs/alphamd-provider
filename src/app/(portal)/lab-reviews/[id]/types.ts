@@ -7,12 +7,16 @@
  * a build error by design.
  */
 
+import type { OrderLine } from '@/lib/labReviews/orders'
+
 export type FileKind = 'pdf' | 'image' | 'unsupported'
 
 export type PatientFile = {
   id: number
   path: string
   name: string
+  /** From bucket metadata, not the path — the stored extension lies. */
+  mimeType: string | null
   kind: FileKind
   kindLabel: string
   description: string | null
@@ -31,20 +35,21 @@ export type Medication = {
 }
 
 export type Order = {
-  id: number
+  /** `orders.id` is a uuid, unlike the bigint ids on every other tab's table. */
+  id: string
   orderNumber: string | null
   pharmacy: string | null
   status: string | null
   orderDate: string | null
-  trackingNumber: string | null
-  shippingCarrier: string | null
+  contents: OrderLine[]
 }
 
-export type CsComment = {
+export type CsAuthorRole = 'PATIENT' | 'PROVIDER' | 'STAFF'
+
+export type CsMessage = {
   id: number
-  commentId: string | null
   author: string
-  isStaff: boolean
+  role: CsAuthorRole
   isPublic: boolean
   message: string
   createdAt: string | null
@@ -52,10 +57,14 @@ export type CsComment = {
 }
 
 export type CsThread = {
-  ticketId: string | null
-  subject: string | null
-  comments: CsComment[]
+  ticketId: string
+  subject: string
+  messages: CsMessage[]
+  lastActivityAt: string | null
   unreadCount: number
-  totalTickets: number
-  lastReadAt: string | null
+}
+
+export type CsInbox = {
+  threads: CsThread[]
+  unreadCount: number
 }

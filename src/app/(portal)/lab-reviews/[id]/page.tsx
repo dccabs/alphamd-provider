@@ -3,7 +3,7 @@ import { notFound, redirect } from 'next/navigation'
 import { checkProviderAccess } from '@/lib/authz'
 import { AccessDenied } from '@/components/access-denied'
 import { getLabReview, getMedications, getPatientHeader } from '@/lib/labReviews/queries'
-import { getCsThread, getFiles, getNotes, getOrders } from '@/lib/labReviews/tabs'
+import { getCsThreads, getFiles, getNotes, getOrders } from '@/lib/labReviews/tabs'
 import { signLabFile } from '@/lib/labReviews/storage'
 import { parseSummary } from '@/lib/labReviews/summaryMarkdown'
 import { LabReviewScreen } from './LabReviewScreen'
@@ -36,7 +36,7 @@ export default async function LabReviewDetailPage({
     getMedications(review.patientId),
     getOrders(review.patientId),
     getFiles(review.patientId),
-    getCsThread(review.patientId, access.access.userId),
+    getCsThreads(review.patientId, access.access.userId),
   ])
 
   if (!header) notFound()
@@ -64,6 +64,7 @@ export default async function LabReviewDetailPage({
       summaryError={review.summaryError}
       summaryGeneratedAt={review.report?.createdAt ?? null}
       analytes={review.report?.analytes ?? []}
+      analyteCollections={review.report?.collections ?? []}
       collectionDate={review.report?.collectionDate ?? null}
       notes={notes}
       medications={medications}

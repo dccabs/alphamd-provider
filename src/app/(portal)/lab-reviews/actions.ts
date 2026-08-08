@@ -1,6 +1,7 @@
 'use server'
 
 import { checkProviderAccess } from '@/lib/authz'
+import { getPdfPageCount } from '@/lib/labReviews/pdf'
 import { signLabFile } from '@/lib/labReviews/storage'
 import { replyToTicket } from '@/lib/zendesk'
 
@@ -19,19 +20,37 @@ const DENIED = 'Your session has expired. Reload the page and sign in again.'
 
 export type SignedFile = { ok: true; url: string } | { ok: false; error: string }
 
+/** Only lab files are reachable from this screen. Refusing arbitrary paths
+ *  keeps these actions from becoming a general-purpose bucket reader. */
+function isLabFile(storedPath: string): boolean {
+  return storedPath.startsWith('original-test-results/')
+}
+
 /** Mint a short-lived signed URL for a stored lab file. */
 export async function signFileAction(storedPath: string): Promise<SignedFile> {
   const access = await checkProviderAccess()
   if (!access.ok) return { ok: false, error: DENIED }
 
-  if (!storedPath.startsWith('original-test-results/')) {
-    // Only lab files are viewable from this screen. Refusing arbitrary paths
-    // keeps the action from becoming a general-purpose bucket reader.
+  if (!isLabFile(storedPath)) {
     return { ok: false, error: 'That file is not a lab document.' }
   }
 
   const url = await signLabFile(storedPath)
   return url ? { ok: true, url } : { ok: false, error: 'Could not open this file.' }
+}
+
+/**
+ * A PDF's page total, or null when it cannot be determined.
+ *
+ * Separate from `signFileAction` so the viewer can show the document straight
+ * away: reading the file to count its pages takes a few hundred milliseconds
+ * and the page number is legible without a total in the meantime.
+ */
+export async function pdfPageCountAction(storedPath: string): Promise<number | null> {
+  const access = await checkProviderAccess()
+  if (!access.ok || !isLabFile(storedPath)) return null
+
+  return getPdfPageCount(storedPath)
 }
 
 export type ReplyState = {

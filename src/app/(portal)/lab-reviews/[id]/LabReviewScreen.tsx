@@ -12,11 +12,11 @@ import { MORE_ACTIONS, STATIC_NOTICES } from '@/lib/labReviews/fixtures'
 import type { Note } from '@/lib/labReviews/notes'
 import type { Block } from '@/lib/labReviews/summaryMarkdown'
 import { signFileAction } from '../actions'
-import { AiAnalysisCard, type Analyte } from './AiAnalysisCard'
+import { AiAnalysisCard, type Analyte, type AnalyteCollection } from './AiAnalysisCard'
 import { DetailTabs } from './DetailTabs'
 import { DocumentViewer } from './DocumentViewer'
 import { ReviewModal } from './ReviewModal'
-import type { CsThread, Medication, Order, PatientFile } from './types'
+import type { CsInbox, Medication, Order, PatientFile } from './types'
 
 export type PatientHeader = {
   patientId: string
@@ -44,6 +44,7 @@ export function LabReviewScreen({
   summaryError,
   summaryGeneratedAt,
   analytes,
+  analyteCollections,
   collectionDate,
   notes,
   medications,
@@ -65,12 +66,13 @@ export function LabReviewScreen({
   summaryError: string | null
   summaryGeneratedAt: string | null
   analytes: Analyte[]
+  analyteCollections: AnalyteCollection[]
   collectionDate: string | null
   notes: Note[]
   medications: Medication[]
   orders: Order[]
   files: PatientFile[]
-  cs: CsThread
+  cs: CsInbox
   initialFile: PatientFile | null
   initialSignedUrl: string | null
   initialSignError: string | null
@@ -234,11 +236,12 @@ export function LabReviewScreen({
           </div>
         </section>
 
-        <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-[1fr_400px]">
+        <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-[1fr_400px] xl:items-stretch">
           <div className="overflow-hidden rounded-xl border bg-card">
             <AiAnalysisCard
               blocks={summaryBlocks}
               analytes={analytes}
+              collections={analyteCollections}
               collectionDate={collectionDate}
               summaryStatus={summaryStatus}
               summaryError={summaryError}
@@ -246,17 +249,26 @@ export function LabReviewScreen({
             <DocumentViewer file={shownFile} signedUrl={signedUrl} error={signError} />
           </div>
 
-          <DetailTabs
-            notes={notes}
-            summaryBlocks={summaryBlocks}
-            summaryGeneratedAt={summaryGeneratedAt}
-            medications={medications}
-            orders={orders}
-            files={files}
-            cs={cs}
-            shownFileId={shownFile?.id ?? null}
-            onShowFile={showFile}
-          />
+          {/*
+            The tabs are lifted out of the grid's height calculation so the row
+            is measured from the viewer alone, then stretched back over it.
+            Sizing them by their own content instead would let a patient with a
+            long history stretch the row past the page, and a hardcoded height
+            drifts the moment the AI card is expanded.
+          */}
+          <div className="xl:relative">
+            <DetailTabs
+              notes={notes}
+              summaryBlocks={summaryBlocks}
+              summaryGeneratedAt={summaryGeneratedAt}
+              medications={medications}
+              orders={orders}
+              files={files}
+              cs={cs}
+              shownFileId={shownFile?.id ?? null}
+              onShowFile={showFile}
+            />
+          </div>
         </div>
       </div>
 

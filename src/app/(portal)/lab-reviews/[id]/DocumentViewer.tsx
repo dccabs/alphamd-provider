@@ -1,36 +1,84 @@
 'use client'
 
-import { useState } from 'react'
-import { ChevronLeft, ChevronRight, Download, FileText, Maximize2 } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { ChevronLeft, ChevronRight, Download, FileText } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
-import { fileTypeName, isUnrenderableImage } from '@/lib/labReviews/files'
+import { downloadFileName, fileTypeName, isUnrenderableImage } from '@/lib/labReviews/files'
+import { pdfPageCountAction } from '../actions'
 import type { PatientFile } from './types'
 
 /**
  * The lab document viewer.
  *
- * The design assumes a paginated PDF, but only 85% of files in the lab bucket
- * are PDFs. This branches on the real file type:
+ * The design assumes a paginated PDF, but only 81% of files in the lab bucket
+ * are PDFs. This branches on `file.kind`, which comes from the bucket's MIME
+ * metadata rather than the stored extension — see `files.ts` for why the
+ * extension cannot be trusted.
  *
  *  - **PDF** — embedded, with page and zoom controls. Page navigation is driven
  *    through the PDF viewer's own `#page=` fragment; the total page count is not
  *    knowable without parsing the file, so the control is open-ended rather than
  *    claiming a total it does not have.
- *  - **Image** (jpg/jpeg/png/webp/gif, 14.7% of files) — zoom kept, page
- *    controls **hidden** rather than shown-and-disabled, because an image has no
- *    pages at all.
- *  - **HEIC/HEIF** (33 files) — not embedded. Chrome and Firefox cannot decode
+ *  - **Image** (jpeg/png, 18% of files) — zoom kept, page controls **hidden**
+ *    rather than shown-and-disabled, because an image has no pages at all.
+ *  - **HEIC/HEIF** (35 files) — not embedded. Chrome and Firefox cannot decode
  *    them, so an `<img>` renders as a broken icon with no explanation. An honest
  *    message plus a download is better. Safari *can* render them, which is
  *    exactly why this must not be tested only in Safari.
- *  - **Anything else** (docx/xlsx/tiff/dng/no extension, ~34 files) — download
- *    only.
+ *  - **Anything else** (docx/tiff/dng/zip, ~30 files) — download only.
  */
 
 const MIN_ZOOM = 50
 const MAX_ZOOM = 150
 const ZOOM_STEP = 10
+
+/**
+ * A link that saves the file instead of opening it.
+ *
+ * The `download` attribute is ignored on cross-origin URLs, so on a Supabase
+ * signed link it did nothing and the button merely opened a new tab. Storage
+ * honours a `download` query parameter by returning
+ * `Content-Disposition: attachment`, which is the only thing that actually
+ * downloads here.
+ */
+function downloadUrl(signedUrl: string, file: PatientFile): string {
+  const separator = signedUrl.includes('?') ? '&' : '?'
+  const name = downloadFileName(file.name, file.path, file.mimeType)
+  return `${signedUrl}${separator}download=${encodeURIComponent(name)}`
+}
+
+/**
+ * The PDF's page total, or null until it is known.
+ *
+ * Counting pages means reading the file server-side, so it is fetched after the
+ * document is already on screen rather than blocking the page. Until it
+ * arrives — or if it cannot be determined — the control reads "Page 1" and the
+ * Next button stays open-ended, which is how it behaved before totals existed.
+ */
+function usePdfPageCount(file: PatientFile | null): number | null {
+  const [pageCount, setPageCount] = useState<number | null>(null)
+  const path = file?.kind === 'pdf' ? file.path : null
+
+  useEffect(() => {
+    if (!path) return
+
+    let current = true
+    pdfPageCountAction(path)
+      .then((count) => {
+        if (current) setPageCount(count)
+      })
+      .catch(() => {
+        // The total is a nicety; a failure leaves the control open-ended.
+      })
+
+    return () => {
+      current = false
+    }
+  }, [path])
+
+  return pageCount
+}
 
 export function DocumentViewer(props: {
   file: PatientFile | null
@@ -54,10 +102,12 @@ function ViewerFrame({
 }) {
   const [zoom, setZoom] = useState(100)
   const [page, setPage] = useState(1)
+  const pageCount = usePdfPageCount(file)
 
   const kind = file?.kind ?? 'unsupported'
   const showPageControls = kind === 'pdf'
   const showZoom = kind === 'pdf' || kind === 'image'
+  const atLastPage = pageCount !== null && page >= pageCount
 
   return (
     <section className="overflow-hidden rounded-xl border bg-card">
@@ -86,12 +136,14 @@ function ViewerFrame({
               </button>
               <span className="flex h-full items-center border-x px-2 text-xs font-medium tabular-nums">
                 Page {page}
+                {pageCount !== null && ` of ${pageCount}`}
               </span>
               <button
                 type="button"
-                onClick={() => setPage((p) => p + 1)}
+                onClick={() => setPage((p) => (atLastPage ? p : p + 1))}
+                disabled={atLastPage}
                 aria-label="Next page"
-                className="flex h-full items-center px-2 text-muted-foreground hover:bg-muted"
+                className="flex h-full items-center px-2 text-muted-foreground hover:bg-muted disabled:opacity-40"
               >
                 <ChevronRight className="size-3.5" />
               </button>
@@ -124,22 +176,27 @@ function ViewerFrame({
             </div>
           )}
 
-          {signedUrl && (
-            <>
-              <Button variant="outline" size="sm" nativeButton={false} render={<a href={signedUrl} target="_blank" rel="noopener noreferrer" />}>
-                <Maximize2 />
-                Fullscreen
-              </Button>
-              <Button variant="outline" size="sm" nativeButton={false} render={<a href={signedUrl} download />}>
-                <Download />
-                Download
-              </Button>
-            </>
+          {signedUrl && file && (
+            <Button
+              variant="outline"
+              size="sm"
+              nativeButton={false}
+              render={<a href={downloadUrl(signedUrl, file)} />}
+            >
+              <Download />
+              Download
+            </Button>
           )}
         </div>
       </div>
 
-      <div className="flex h-[640px] items-start justify-center overflow-auto bg-zinc-700 p-6">
+      {/*
+        Tall enough for a whole US Letter page at 100% without the embedded
+        viewer scrolling: 792pt × 96/72 = 1056px, plus Chrome's 3px/7px page
+        shadow, plus this element's 24px padding top and bottom. A4 is 66px
+        taller and will still scroll slightly.
+      */}
+      <div className="flex h-[1114px] items-start justify-center overflow-auto bg-zinc-700 p-6">
         <ViewerBody file={file} signedUrl={signedUrl} error={error} zoom={zoom} page={page} />
       </div>
     </section>
@@ -174,10 +231,15 @@ function ViewerBody({
   if (file.kind === 'pdf') {
     return (
       <iframe
-        // `#page=` is re-read by the embedded viewer when the src changes, so
-        // keying on it forces a reload to the requested page.
-        key={`${file.id}-${page}`}
-        src={`${signedUrl}#page=${page}&zoom=${zoom}`}
+        // Changing only the fragment of a live iframe does not move the
+        // embedded viewer — it re-reads `#page=`/`#zoom=` on load. Both must
+        // therefore be in the key, so a change remounts and reloads. Leaving
+        // zoom out of it was why the zoom buttons appeared dead.
+        key={`${file.id}-${page}-${zoom}`}
+        // `toolbar=0` hides Chrome's own toolbar and thumbnail sidebar, so the
+        // controls above are the only ones on screen. `navpanes=0` is redundant
+        // in Chrome but is what other Chromium-based viewers honour.
+        src={`${signedUrl}#page=${page}&zoom=${zoom}&toolbar=0&navpanes=0`}
         title={file.name}
         className="h-full w-full max-w-4xl rounded-sm bg-white shadow-lg"
       />
@@ -202,12 +264,12 @@ function ViewerBody({
     <Fallback
       title="Preview not supported in this browser"
       body={
-        isUnrenderableImage(file.path)
-          ? `${fileTypeName(file.path)} images render only in Safari, so this one is not embedded. Download it to view.`
-          : `${fileTypeName(file.path)} files cannot be shown inline. Download it to view.`
+        isUnrenderableImage(file.path, file.mimeType)
+          ? `${fileTypeName(file.path, file.mimeType)} images render only in Safari, so this one is not embedded. Download it to view.`
+          : `${fileTypeName(file.path, file.mimeType)} files cannot be shown inline. Download it to view.`
       }
       action={
-        <Button size="sm" nativeButton={false} render={<a href={signedUrl} download />}>
+        <Button size="sm" nativeButton={false} render={<a href={downloadUrl(signedUrl, file)} />}>
           <Download />
           Download {file.name}
         </Button>

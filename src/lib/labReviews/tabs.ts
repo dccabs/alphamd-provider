@@ -3,6 +3,8 @@ import 'server-only'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { classifyFile, displayFileName, fileKindLabel } from './files'
 import type { Note, NoteTag } from './notes'
+import { orderContentLines, type OrderLine } from './orders'
+import { getLabFileMimeTypes } from './storage'
 
 /** Right-rail tab data. Same rule as queries.ts: callers run
  *  `requireProviderAccess()` first. */
@@ -65,13 +67,13 @@ export async function getNotes(patientId: string): Promise<Note[]> {
 }
 
 export type Order = {
-  id: number
+  /** `orders.id` is a uuid, unlike the bigint ids on every other tab's table. */
+  id: string
   orderNumber: string | null
   pharmacy: string | null
   status: string | null
   orderDate: string | null
-  trackingNumber: string | null
-  shippingCarrier: string | null
+  contents: OrderLine[]
 }
 
 /**
@@ -85,6 +87,9 @@ export type Order = {
  *
  * This is the opposite of `patient_medications`, `user_files` and
  * `zendesk_last_contact`, where `user_id` *is* the patient.
+ *
+ * What was ordered lives in `additional_information` — see `orders.ts`. There is
+ * no line-item table to join.
  */
 export async function getOrders(patientId: string): Promise<Order[]> {
   const admin = createAdminClient()
@@ -92,7 +97,7 @@ export async function getOrders(patientId: string): Promise<Order[]> {
   const { data, error } = await admin
     .from('orders')
     .select(
-      'id, order_number, pharmacy, other_pharmacy, order_status, order_date, created_at, tracking_number, shipping_carrier, other_shipping_carrier'
+      'id, order_number, pharmacy, other_pharmacy, order_status, order_date, created_at, additional_information'
     )
     .eq('patient_id', patientId)
     .order('order_date', { ascending: false, nullsFirst: false })
@@ -100,17 +105,13 @@ export async function getOrders(patientId: string): Promise<Order[]> {
   if (error) throw new Error(`orders query failed: ${error.message}`)
 
   return (data ?? []).map((r) => ({
-    id: Number(r.id),
+    id: String(r.id),
     orderNumber: (r.order_number as string | null)?.trim() || null,
     pharmacy:
       (r.pharmacy as string | null)?.trim() || (r.other_pharmacy as string | null)?.trim() || null,
     status: (r.order_status as string | null)?.trim() || null,
     orderDate: (r.order_date as string | null) ?? (r.created_at as string | null) ?? null,
-    trackingNumber: (r.tracking_number as string | null)?.trim() || null,
-    shippingCarrier:
-      (r.shipping_carrier as string | null)?.trim() ||
-      (r.other_shipping_carrier as string | null)?.trim() ||
-      null,
+    contents: orderContentLines(r.additional_information as string | null),
   }))
 }
 
@@ -118,6 +119,9 @@ export type PatientFile = {
   id: number
   path: string
   name: string
+  /** From bucket metadata, not the path — the stored extension lies. Null when
+   *  the object has no metadata or the lookup failed. */
+  mimeType: string | null
   kind: ReturnType<typeof classifyFile>
   kindLabel: string
   description: string | null
@@ -135,27 +139,33 @@ export async function getFiles(patientId: string): Promise<PatientFile[]> {
     .limit(100)
   if (error) throw new Error(`user_files query failed: ${error.message}`)
 
-  return (data ?? [])
-    .filter((r) => !!r.file_name)
-    .map((r) => {
-      const path = r.file_name as string
-      return {
-        id: Number(r.id),
-        path,
-        name: displayFileName(path, r.user_file_name as string | null),
-        kind: classifyFile(path),
-        kindLabel: fileKindLabel(path),
-        description: (r.description as string | null)?.trim() || null,
-        createdAt: (r.created_at as string | null) ?? null,
-      }
-    })
+  const rows = (data ?? []).filter((r) => !!r.file_name)
+  const mimeTypes = await getLabFileMimeTypes(rows.map((r) => r.file_name as string))
+
+  return rows.map((r) => {
+    const path = r.file_name as string
+    const mimeType = mimeTypes.get(path) ?? null
+    return {
+      id: Number(r.id),
+      path,
+      name: displayFileName(path, r.user_file_name as string | null, mimeType),
+      mimeType,
+      kind: classifyFile(path, mimeType),
+      kindLabel: fileKindLabel(path, mimeType),
+      description: (r.description as string | null)?.trim() || null,
+      createdAt: (r.created_at as string | null) ?? null,
+    }
+  })
 }
 
-export type CsComment = {
+/** Who wrote a message. `PROVIDER` is a staff author holding role 3, the same
+ *  test the Notes tab uses, so the two tabs agree on who is a provider. */
+export type CsAuthorRole = 'PATIENT' | 'PROVIDER' | 'STAFF'
+
+export type CsMessage = {
   id: number
-  commentId: string | null
   author: string
-  isStaff: boolean
+  role: CsAuthorRole
   isPublic: boolean
   message: string
   createdAt: string | null
@@ -163,101 +173,140 @@ export type CsComment = {
 }
 
 export type CsThread = {
-  ticketId: string | null
-  subject: string | null
-  comments: CsComment[]
+  ticketId: string
+  subject: string
+  /** Oldest first, the order the conversation happened in. */
+  messages: CsMessage[]
+  lastActivityAt: string | null
   unreadCount: number
-  totalTickets: number
-  lastReadAt: string | null
 }
 
+export type CsInbox = {
+  /** Most recently active first. */
+  threads: CsThread[]
+  unreadCount: number
+}
+
+const NO_MESSAGES: CsInbox = { threads: [], unreadCount: 0 }
+
 /**
- * The CS thread is a **database read**, not a Zendesk API call —
- * `zendesk_last_contact` is a full comment mirror (70k+ rows, a year of
- * history) maintained by a webhook Zendesk fires at alphamd. Only sending needs
- * the API.
+ * Every Zendesk thread for a patient, grouped by ticket.
  *
- * Two things this has to get right:
+ * This is a **database read**, not a Zendesk API call — `zendesk_last_contact`
+ * is a full comment mirror (70k+ rows) maintained by a webhook Zendesk fires at
+ * alphamd. Only sending needs the API.
+ *
+ * Three things it has to get right:
  *  - 22% of comments have `is_public = false`. Those are internal staff notes
  *    the patient never saw, and the UI must mark them, or a provider will
  *    believe the patient read something they did not.
- *  - The average patient has 4.8 tickets and the maximum is 65, while the
- *    design shows one thread. We show the ticket holding the most recent
- *    comment and state which one it is; `totalTickets` lets the UI say so.
+ *  - Patients average 5.5 tickets and the busiest real account has 65, so a
+ *    single flattened transcript would interleave unrelated conversations.
+ *  - `is_staff` alone cannot tell a provider from support. `staff_user_id` is
+ *    set on 78% of staff comments and resolves through `user_roles_join`; the
+ *    remainder are honestly labelled STAFF rather than guessed at.
+ *
+ * The 500-row ceiling is a safety net, not a real limit: the busiest patient
+ * has 192 comments.
  */
-export async function getCsThread(patientId: string, readerId: string): Promise<CsThread> {
+export async function getCsThreads(patientId: string, readerId: string): Promise<CsInbox> {
   const admin = createAdminClient()
 
   const { data, error } = await admin
     .from('zendesk_last_contact')
     .select(
-      'id, ticket_id, comment_id, subject, message, is_public, is_staff, requester_name, attachments, created_at'
+      'id, ticket_id, subject, message, is_public, is_staff, staff_user_id, requester_name, attachments, created_at'
     )
     .eq('user_id', patientId)
     .order('created_at', { ascending: false })
     .limit(500)
   if (error) throw new Error(`zendesk_last_contact query failed: ${error.message}`)
 
-  const rows = data ?? []
-  if (!rows.length) {
-    return {
-      ticketId: null,
-      subject: null,
-      comments: [],
-      unreadCount: 0,
-      totalTickets: 0,
-      lastReadAt: null,
+  const rows = (data ?? []).filter((r) => r.ticket_id)
+  if (!rows.length) return NO_MESSAGES
+
+  const ticketIds = [...new Set(rows.map((r) => r.ticket_id as string))]
+  const staffIds = [
+    ...new Set(rows.map((r) => r.staff_user_id as string | null).filter(Boolean) as string[]),
+  ]
+
+  const [reads, roles] = await Promise.all([
+    admin
+      .from('zendesk_ticket_reads')
+      .select('ticket_id, last_read_at')
+      .eq('user_id', readerId)
+      .in('ticket_id', ticketIds),
+    staffIds.length
+      ? admin.from('user_roles_join').select('user_id, role').in('user_id', staffIds)
+      : Promise.resolve({ data: [], error: null }),
+  ])
+  if (reads.error) throw new Error(`zendesk_ticket_reads query failed: ${reads.error.message}`)
+  if (roles.error) throw new Error(`message author roles lookup failed: ${roles.error.message}`)
+
+  const readAtByTicket = new Map(
+    (reads.data ?? []).map((r) => [r.ticket_id as string, r.last_read_at as string | null])
+  )
+  const providerIds = new Set(
+    (roles.data ?? [])
+      .filter((r) => Number(r.role) === 3)
+      .map((r) => r.user_id as string)
+  )
+
+  const byTicket = new Map<string, CsThread>()
+
+  // Rows arrive newest-first; each thread's messages are reversed below.
+  for (const r of rows) {
+    const ticketId = r.ticket_id as string
+    const staffUserId = r.staff_user_id as string | null
+
+    let role: CsAuthorRole = 'PATIENT'
+    if (r.is_staff) role = staffUserId && providerIds.has(staffUserId) ? 'PROVIDER' : 'STAFF'
+
+    const message: CsMessage = {
+      id: Number(r.id),
+      author:
+        (r.requester_name as string | null)?.trim() || (r.is_staff ? 'Care team' : 'Patient'),
+      role,
+      isPublic: r.is_public !== false,
+      message: (r.message as string | null) ?? '',
+      createdAt: (r.created_at as string | null) ?? null,
+      attachmentCount: Array.isArray(r.attachments) ? r.attachments.length : 0,
     }
+
+    const existing = byTicket.get(ticketId)
+    if (existing) {
+      existing.messages.push(message)
+      continue
+    }
+
+    byTicket.set(ticketId, {
+      ticketId,
+      // The first row for a ticket is its newest, so this is the latest activity.
+      lastActivityAt: message.createdAt,
+      subject: (r.subject as string | null)?.trim() || `Ticket ${ticketId}`,
+      messages: [message],
+      unreadCount: 0,
+    })
   }
 
-  const totalTickets = new Set(rows.map((r) => r.ticket_id as string).filter(Boolean)).size
-  // Rows are newest-first, so the first row's ticket is the most recently active.
-  const ticketId = (rows.find((r) => r.ticket_id)?.ticket_id as string | null) ?? null
+  const threads = [...byTicket.values()].map((thread) => {
+    thread.messages.reverse()
 
-  const threadRows = rows.filter((r) => r.ticket_id === ticketId)
+    // Unread = patient messages the reader has not acknowledged. With no
+    // receipt at all, report zero rather than marking a year of history unread.
+    const lastReadAt = readAtByTicket.get(thread.ticketId) ?? null
+    thread.unreadCount = lastReadAt
+      ? thread.messages.filter(
+          (m) =>
+            m.role === 'PATIENT' && m.createdAt && new Date(m.createdAt) > new Date(lastReadAt)
+        ).length
+      : 0
 
-  const { data: readRow, error: readError } = await admin
-    .from('zendesk_ticket_reads')
-    .select('last_read_at')
-    .eq('user_id', readerId)
-    .eq('ticket_id', ticketId ?? '')
-    .maybeSingle()
-  if (readError) throw new Error(`zendesk_ticket_reads query failed: ${readError.message}`)
-
-  const lastReadAt = (readRow?.last_read_at as string | null) ?? null
-
-  const comments: CsComment[] = threadRows
-    .map((r) => {
-      const attachments = r.attachments
-      return {
-        id: Number(r.id),
-        commentId: (r.comment_id as string | null) ?? null,
-        author: (r.requester_name as string | null)?.trim() || (r.is_staff ? 'Care team' : 'Patient'),
-        isStaff: Boolean(r.is_staff),
-        isPublic: r.is_public !== false,
-        message: (r.message as string | null) ?? '',
-        createdAt: (r.created_at as string | null) ?? null,
-        attachmentCount: Array.isArray(attachments) ? attachments.length : 0,
-      }
-    })
-    // Oldest first for a chat transcript.
-    .reverse()
-
-  // Unread = patient-authored public comments newer than this reader's receipt.
-  // With no receipt row at all, report zero rather than marking a year of
-  // history unread.
-  const unreadCount = lastReadAt
-    ? comments.filter(
-        (c) => !c.isStaff && c.createdAt && new Date(c.createdAt) > new Date(lastReadAt)
-      ).length
-    : 0
+    return thread
+  })
 
   return {
-    ticketId,
-    subject: (threadRows.find((r) => r.subject)?.subject as string | null) ?? null,
-    comments,
-    unreadCount,
-    totalTickets,
-    lastReadAt,
+    threads,
+    unreadCount: threads.reduce((total, thread) => total + thread.unreadCount, 0),
   }
 }

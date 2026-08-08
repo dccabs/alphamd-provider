@@ -59,12 +59,22 @@ export type LabReviewReport = {
   analytes: Analyte[]
   collectionDate: string | null
   sourceFileName: string | null
+  collections: AnalyteCollection[]
 }
 
 /** One extracted lab value. There is deliberately no high/low flag: the stored
  *  JSON has display strings only, and no reference-range table exists anywhere
  *  in the database — see the AI chips note in the README. */
 export type Analyte = { name: string; value: string }
+
+/** One lab file's worth of extracted values. The header chips only ever show
+ *  the latest, but 74 reports in production carry two to six collections and
+ *  the full list is what the "+N more" dialog is for. */
+export type AnalyteCollection = {
+  collectionDate: string | null
+  fileName: string | null
+  analytes: Analyte[]
+}
 
 export type LabReviewSource = {
   id: number
@@ -184,31 +194,41 @@ function parseAnalytes(json: unknown): {
   analytes: Analyte[]
   collectionDate: string | null
   sourceFileName: string | null
+  collections: AnalyteCollection[]
 } {
-  const empty = { analytes: [], collectionDate: null, sourceFileName: null }
+  const empty = { analytes: [], collectionDate: null, sourceFileName: null, collections: [] }
   if (!json || typeof json !== 'object') return empty
 
   const results = (json as { labResults?: unknown }).labResults
   if (!Array.isArray(results) || !results.length) return empty
 
-  // The extractor emits one entry per lab file; the most recent is first.
-  const latest = results[0] as {
-    values?: Record<string, unknown>
-    collectionDate?: unknown
-    fileName?: unknown
-  }
+  // The extractor emits one entry per lab file, most recent first.
+  const collections: AnalyteCollection[] = results.map((raw) => {
+    const entry = (raw ?? {}) as {
+      values?: Record<string, unknown>
+      collectionDate?: unknown
+      fileName?: unknown
+    }
 
-  const values = latest?.values ?? {}
-  const analytes: Analyte[] = Object.entries(values)
-    // A null value means the extractor did not find that analyte. Dropping it
-    // is correct — rendering it would print the string "null" on a lab screen.
-    .filter(([, v]) => typeof v === 'string' && v.trim())
-    .map(([name, v]) => ({ name, value: (v as string).trim() }))
+    return {
+      collectionDate: typeof entry.collectionDate === 'string' ? entry.collectionDate : null,
+      fileName: typeof entry.fileName === 'string' ? entry.fileName : null,
+      analytes: Object.entries(entry.values ?? {})
+        // Every entry carries all nine panel keys, and a null means the
+        // extractor did not find that analyte. Dropping it is correct —
+        // rendering it would print the string "null" on a lab screen.
+        .filter(([, v]) => typeof v === 'string' && v.trim())
+        .map(([name, v]) => ({ name, value: (v as string).trim() })),
+    }
+  })
+
+  const latest = collections[0]
 
   return {
-    analytes,
-    collectionDate: typeof latest?.collectionDate === 'string' ? latest.collectionDate : null,
-    sourceFileName: typeof latest?.fileName === 'string' ? latest.fileName : null,
+    analytes: latest.analytes,
+    collectionDate: latest.collectionDate,
+    sourceFileName: latest.fileName,
+    collections,
   }
 }
 
@@ -288,6 +308,7 @@ export async function getLabReview(id: string): Promise<LabReviewDetail | null> 
           patientSummary: reportRow.patient_summary,
           createdAt: reportRow.created_at,
           analytes: extracted!.analytes,
+          collections: extracted!.collections,
           collectionDate: extracted!.collectionDate,
           sourceFileName: extracted!.sourceFileName,
         }
