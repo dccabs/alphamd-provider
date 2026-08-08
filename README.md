@@ -40,15 +40,22 @@ holds real features.
 ## Getting started
 
 ```bash
-npm install
+corepack enable              # once per machine, to get the pinned pnpm
+pnpm install
 cp .env.example .env.local   # then fill it in
-npm run dev
+pnpm dev
 ```
 
 Copy `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` from the
 `alphamd` Vercel project, and set `NEXT_PUBLIC_SITE_URL=http://localhost:3000`.
 
-Requires Node >= 20.9.0 (`next@16`).
+Requires Node >= 20.9.0 (`next@16`). The package manager is **pnpm**, pinned by
+the `packageManager` field in `package.json` — Corepack installs that exact
+version, so don't use `npm` or `yarn` here and don't commit their lockfiles.
+
+pnpm refuses to run dependency install scripts until each is explicitly allowed
+in `pnpm-workspace.yaml`, and fails the install on anything unlisted. If a new
+dependency trips that, add it there rather than working around it.
 
 ## Environment variables
 
@@ -76,7 +83,7 @@ untouched.
   components driven by Server Actions.
 - UI is stock **shadcn/ui** (`base-nova` preset — Base UI primitives, Lucide
   icons, Geist, neutral theme). Components live in `src/components/ui` and are
-  owned by this repo; add more with `npx shadcn@latest add <name>`. This is a
+  owned by this repo; add more with `pnpm dlx shadcn@latest add <name>`. This is a
   deliberate fresh start — do **not** port the main app's palette or
   components across. Note Base UI uses a `render` prop rather than Radix's
   `asChild`.
@@ -85,4 +92,4 @@ untouched.
 - Request-level auth lives in `src/proxy.ts`. Next 16 deprecates the
   `middleware` file convention in favour of `proxy` — do not add a
   `middleware.ts`, and do not add `export const runtime` to the proxy.
-- `next lint` no longer exists in Next 16. Lint with `npm run lint` (`eslint`).
+- `next lint` no longer exists in Next 16. Lint with `pnpm lint` (`eslint`).

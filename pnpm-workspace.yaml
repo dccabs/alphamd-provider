@@ -1,0 +1,8 @@
+# pnpm settings live here rather than in package.json as of pnpm 10+.
+#
+# pnpm blocks dependency install scripts and fails the install until each one is
+# explicitly allowed or denied here. unrs-resolver arrives via eslint-config-next
+# and its script only builds a fallback native binding, which npm and yarn both
+# ran before the move to pnpm.
+allowBuilds:
+  unrs-resolver: true
