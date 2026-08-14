@@ -1,9 +1,11 @@
 import 'server-only'
 
 import { createAdminClient } from '@/lib/supabase/admin'
+import { consultationOutcome, type Consultation } from './consultations'
 import { classifyFile, displayFileName, fileKindLabel } from './files'
 import type { Note, NoteTag } from './notes'
 import { orderContentLines, type OrderLine } from './orders'
+import { namesFor } from './queries'
 import { getLabFileMimeTypes } from './storage'
 
 /** Right-rail tab data. Same rule as queries.ts: callers run
@@ -309,4 +311,58 @@ export async function getCsThreads(patientId: string, readerId: string): Promise
     threads,
     unreadCount: threads.reduce((total, thread) => total + thread.unreadCount, 0),
   }
+}
+
+/**
+ * Every consultation booked for a patient, newest first.
+ *
+ * `user_consultation_schedules.user_id` is the **patient**; `medical_provider`
+ * is the staff member who took the call, and it holds ids outside the current
+ * provider roster — 11 distinct values against 10 accounts holding role 3 — so
+ * names are resolved from `user_list` generally rather than from providers.
+ *
+ * Ordering by start time descending puts anything still upcoming at the top for
+ * free, because those are the only rows dated in the future. What each status
+ * value actually means, and why attendance is not inferred from it, is in
+ * `consultations.ts`.
+ */
+export async function getConsultations(patientId: string): Promise<Consultation[]> {
+  const admin = createAdminClient()
+
+  const { data, error } = await admin
+    .from('user_consultation_schedules')
+    .select(
+      'id, event_start_time, event_end_time, event_status, event_name, medical_provider, timezone'
+    )
+    .eq('user_id', patientId)
+    .order('event_start_time', { ascending: false, nullsFirst: false })
+    .limit(50)
+  if (error) {
+    throw new Error(`user_consultation_schedules query failed: ${error.message}`)
+  }
+
+  const rows = data ?? []
+  if (!rows.length) return []
+
+  const providerIds = rows
+    .map((r) => r.medical_provider as string | null)
+    .filter(Boolean) as string[]
+  const providerNames = await namesFor(providerIds, 'Unnamed provider')
+
+  const now = new Date()
+
+  return rows.map((r) => {
+    const providerId = r.medical_provider as string | null
+    const startsAt = (r.event_start_time as string | null) ?? null
+
+    return {
+      id: String(r.id),
+      startsAt,
+      endsAt: (r.event_end_time as string | null) ?? null,
+      name: (r.event_name as string | null)?.trim() || null,
+      providerName: providerId ? (providerNames.get(providerId) ?? null) : null,
+      timezone: (r.timezone as string | null)?.trim() || null,
+      outcome: consultationOutcome(r.event_status as string | null, startsAt, now),
+    }
+  })
 }

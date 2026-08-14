@@ -33,6 +33,16 @@ export function shortDateTime(value: string | null | undefined): string {
   return `${shortDate(value)} ${hh}:${min}`
 }
 
+/** `09:14` — for a timestamp from the current session, where the date would only
+ *  be noise. Still UTC, like everything else here. */
+export function shortTime(value: string | null | undefined): string {
+  const date = toDate(value)
+  if (!date) return '—'
+  const hh = String(date.getUTCHours()).padStart(2, '0')
+  const min = String(date.getUTCMinutes()).padStart(2, '0')
+  return `${hh}:${min}`
+}
+
 /**
  * `3h ago` / `2d ago`. `now` is injectable so this is testable without
  * freezing the clock.

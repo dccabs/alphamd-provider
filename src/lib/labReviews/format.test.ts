@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { initials, relativeAge, shortDate, shortDateTime, statusTone } from './format.ts'
+import {
+  initials,
+  relativeAge,
+  shortDate,
+  shortDateTime,
+  shortTime,
+  statusTone,
+} from './format.ts'
 
 test('shortDate renders UTC, zero-padded, 2-digit year', () => {
   assert.equal(shortDate('2026-08-05T07:42:00Z'), '08/05/26')
@@ -17,12 +24,19 @@ test('shortDateTime appends UTC time', () => {
   assert.equal(shortDateTime('2026-08-05T09:04:00Z'), '08/05/26 09:04')
 })
 
+test('shortTime drops the date but keeps UTC', () => {
+  assert.equal(shortTime('2026-08-05T09:04:00Z'), '09:04')
+  assert.equal(shortTime('2026-08-05T23:30:00Z'), '23:30')
+})
+
 test('invalid and missing dates render an em dash, never "Invalid Date"', () => {
   assert.equal(shortDate(null), '—')
   assert.equal(shortDate(undefined), '—')
   assert.equal(shortDate(''), '—')
   assert.equal(shortDate('not a date'), '—')
   assert.equal(shortDateTime('not a date'), '—')
+  assert.equal(shortTime('not a date'), '—')
+  assert.equal(shortTime(null), '—')
 })
 
 const NOW = new Date('2026-08-08T12:00:00Z')

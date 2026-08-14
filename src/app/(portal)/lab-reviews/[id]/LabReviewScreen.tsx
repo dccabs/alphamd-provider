@@ -2,77 +2,154 @@
 
 import { useState, useTransition } from 'react'
 import Link from 'next/link'
-import { Check, ChevronLeft, MoreHorizontal, UserPlus } from 'lucide-react'
+import { useRouter } from 'next/navigation'
+import {
+  CalendarPlus,
+  Check,
+  ChevronLeft,
+  FlaskConical,
+  MoreHorizontal,
+  Play,
+  TriangleAlert,
+  UserPlus,
+} from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Textarea } from '@/components/ui/textarea'
-import { shortDate, statusTone } from '@/lib/labReviews/format'
-import { MORE_ACTIONS, STATIC_NOTICES } from '@/lib/labReviews/fixtures'
+import type { LabOrder } from '@/lib/labOrders/order'
+import type { LabProviderOption, ScheduledLabOrder } from '@/lib/labOrders/queries'
+import type { Analyte } from '@/lib/labReviews/analytes'
+import type { Consultation } from '@/lib/labReviews/consultations'
+import { shortDate, shortDateTime, statusTone } from '@/lib/labReviews/format'
+import { MORE_ACTIONS } from '@/lib/labReviews/fixtures'
+import type { Escalation } from '@/lib/labReviews/needsAttention'
 import type { Note } from '@/lib/labReviews/notes'
+import type { ReviewDraft } from '@/lib/labReviews/reviewDraft'
 import type { Block } from '@/lib/labReviews/summaryMarkdown'
-import { signFileAction } from '../actions'
-import { AiAnalysisCard, type Analyte, type AnalyteCollection } from './AiAnalysisCard'
+import {
+  cancelLabOrderAction,
+  escalateLabReviewAction,
+  reassignLabReviewAction,
+  requestConsultationAction,
+  scheduleLabOrderAction,
+  signFileAction,
+  startLabReviewAction,
+} from '../actions'
+import { CONSULT_IDLE, IDLE, type ConsultState, type WriteState } from '../state'
 import { DetailTabs } from './DetailTabs'
+import { EscalatePanel } from './EscalatePanel'
 import { DocumentViewer } from './DocumentViewer'
+import { LabValuesCard } from './LabValuesCard'
+import { OrderLabsPanel } from './OrderLabsPanel'
+import { PatientSnapshot } from './PatientSnapshot'
+import { RequestConsultPanel } from './RequestConsultPanel'
 import { ReviewModal } from './ReviewModal'
-import type { CsInbox, Medication, Order, PatientFile } from './types'
+import type {
+  CatalogMedication,
+  CsInbox,
+  DosageOption,
+  LabReviewEvent,
+  LabReviewNote,
+  Medication,
+  Order,
+  PatientFile,
+  ProviderOption,
+} from './types'
 
 export type PatientHeader = {
   patientId: string
   name: string
   status: string | null
+  statusId: number | null
   age: number | null
   gender: string | null
   dateOfBirth: string | null
   phone: string | null
   email: string | null
   address: string | null
+  state: string | null
   flags: string[]
   protocol: string | null
 }
 
 export function LabReviewScreen({
+  reviewId,
   header,
   reviewStatus,
+  assignedTo,
   assignedToName,
+  startedAt,
+  startedByName,
   queuePosition,
   queueTotal,
+  viewerId,
   viewerName,
+  providers,
+  labProviders,
+  scheduledLabs,
+  events,
+  reviewNotes,
+  needsAttentionReason,
+  draft,
+  draftUpdatedAt,
   summaryBlocks,
   summaryStatus,
   summaryError,
   summaryGeneratedAt,
   analytes,
-  analyteCollections,
   collectionDate,
+  sourceFileName,
   notes,
   medications,
+  catalog,
+  dosageOptions,
   orders,
   files,
   cs,
+  consultations,
   initialFile,
   initialSignedUrl,
   initialSignError,
 }: {
+  reviewId: string
   header: PatientHeader
   reviewStatus: string
+  assignedTo: string | null
   assignedToName: string | null
+  startedAt: string | null
+  startedByName: string | null
   queuePosition: number | null
   queueTotal: number
+  viewerId: string
   viewerName: string
+  providers: ProviderOption[]
+  /** Signing providers for a requisition — `lab_providers`, which is a different
+   *  table from the portal's own user accounts. */
+  labProviders: LabProviderOption[]
+  scheduledLabs: ScheduledLabOrder[]
+  events: LabReviewEvent[]
+  reviewNotes: LabReviewNote[]
+  needsAttentionReason: string | null
+  draft: ReviewDraft
+  draftUpdatedAt: string | null
   summaryBlocks: Block[]
   summaryStatus: string | null
   summaryError: string | null
   summaryGeneratedAt: string | null
   analytes: Analyte[]
-  analyteCollections: AnalyteCollection[]
   collectionDate: string | null
+  sourceFileName: string | null
   notes: Note[]
   medications: Medication[]
+  /** Everything a protocol can be added to, for a new medication. */
+  catalog: CatalogMedication[]
+  /** Every dose in the catalog, which a dose change and a new medication both
+   *  pick from. Keyed by `medicationId`, not by the patient's row. */
+  dosageOptions: DosageOption[]
   orders: Order[]
   files: PatientFile[]
   cs: CsInbox
+  consultations: Consultation[]
   initialFile: PatientFile | null
   initialSignedUrl: string | null
   initialSignError: string | null
@@ -83,7 +160,13 @@ export function LabReviewScreen({
   const [reviewOpen, setReviewOpen] = useState(false)
   const [actionsOpen, setActionsOpen] = useState(false)
   const [assignOpen, setAssignOpen] = useState(false)
-  const [, startTransition] = useTransition()
+  const [escalateOpen, setEscalateOpen] = useState(false)
+  const [orderOpen, setOrderOpen] = useState(false)
+  const [consultOpen, setConsultOpen] = useState(false)
+  const [consult, setConsult] = useState<ConsultState>(CONSULT_IDLE)
+  const [write, setWrite] = useState<WriteState>(IDLE)
+  const [pending, startTransition] = useTransition()
+  const router = useRouter()
 
   const showFile = (file: PatientFile) => {
     setShownFile(file)
@@ -96,7 +179,113 @@ export function LabReviewScreen({
     })
   }
 
+  /**
+   * The Files tab can point the viewer at any of the patient's files, which
+   * leaves the extracted values describing a document that is no longer on
+   * screen. The way back is a fresh sign rather than the URL the page arrived
+   * with: signed links last an hour and a review can be open for longer.
+   */
+  const offReviewFile = Boolean(initialFile && shownFile?.id !== initialFile.id)
+  const backToReviewFile = () => {
+    if (initialFile) showFile(initialFile)
+  }
+
   const finalized = reviewStatus === 'finished'
+  const started = Boolean(startedAt)
+  const mine = assignedTo === viewerId
+
+  /**
+   * "Start Lab Review" claims the review *and* opens the flyout, but only opens
+   * it once the claim succeeded. Opening first would invite a provider to write a
+   * disposition into a review that turned out to belong to somebody else.
+   */
+  const start = () => {
+    setWrite(IDLE)
+    startTransition(async () => {
+      const result = await startLabReviewAction(reviewId)
+      setWrite(result)
+      if (result.status !== 'error') setReviewOpen(true)
+    })
+  }
+
+  /**
+   * Autosave deliberately does not revalidate — that would re-render the page
+   * under a provider mid-sentence. Refreshing once on close is what brings the
+   * History tab and the rehydrated draft back in step.
+   */
+  const closeReview = () => {
+    setReviewOpen(false)
+    router.refresh()
+  }
+
+  const reassign = (toUserId: string) => {
+    setWrite(IDLE)
+    setAssignOpen(false)
+    startTransition(async () => {
+      setWrite(await reassignLabReviewAction(reviewId, toUserId))
+    })
+  }
+
+  const escalate = (escalation: Escalation) => {
+    setWrite(IDLE)
+    startTransition(async () => {
+      const result = await escalateLabReviewAction(reviewId, {
+        targets: escalation.targets,
+        note: escalation.note,
+        toProviderId: escalation.toProviderId,
+      })
+      setWrite(result)
+      // The panel stays open on failure so the note is not lost.
+      if (result.status !== 'error') setEscalateOpen(false)
+    })
+  }
+
+  /**
+   * Ordering labs is the one action here that reaches the patient directly — the
+   * cron emails and texts them — so the panel closes only on success, and the
+   * refresh is what brings the new row into the already-ordered list.
+   */
+  const orderLabs = (order: LabOrder) => {
+    setWrite(IDLE)
+    startTransition(async () => {
+      const result = await scheduleLabOrderAction(reviewId, order)
+      setWrite(result)
+      if (result.status !== 'error') {
+        setOrderOpen(false)
+        router.refresh()
+      }
+    })
+  }
+
+  const cancelOrder = (scheduledId: string) => {
+    setWrite(IDLE)
+    startTransition(async () => {
+      setWrite(await cancelLabOrderAction(reviewId, scheduledId))
+      router.refresh()
+    })
+  }
+
+  /**
+   * The panel stays open after a successful send, showing the booking link. The
+   * email has already gone and the link is single-use, so closing on success would
+   * throw away the only copy of it.
+   */
+  const requestConsult = (input: { eventTypeId: string; message: string }) => {
+    setConsult(CONSULT_IDLE)
+    startTransition(async () => {
+      setConsult(await requestConsultationAction(reviewId, input))
+    })
+  }
+
+  const closeConsult = () => {
+    setConsultOpen(false)
+    setConsult(CONSULT_IDLE)
+    // A sent invitation is on the chart and in the review's history, neither of
+    // which is on screen until the page reloads.
+    router.refresh()
+  }
+
+  const pendingLabCount = scheduledLabs.filter((lab) => lab.status === 'pending').length
 
   const demographics = [
     header.age != null ? String(header.age) : null,
@@ -132,119 +321,248 @@ export function LabReviewScreen({
       </header>
 
       <div className="mx-auto flex max-w-[1440px] flex-col gap-4 px-6 pt-5 pb-8">
-        <section className="flex flex-wrap items-start justify-between gap-4 rounded-xl border bg-card px-5 py-4">
-          <div className="flex min-w-0 flex-col gap-2">
-            <div className="flex flex-wrap items-center gap-3">
-              <h1 className="text-xl font-semibold tracking-tight">{header.name}</h1>
-              {header.status &&
-                (statusTone(header.status) === 'active' ? (
-                  <span className="inline-flex items-center gap-1.5 rounded-full border border-green-200 bg-green-50 px-2.5 py-1 text-xs font-semibold text-green-700">
-                    <span className="size-1.5 rounded-full bg-green-500" />
-                    {header.status}
-                    {header.protocol ? ` — ${header.protocol}` : ''}
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center gap-1.5 rounded-full border bg-muted px-2.5 py-1 text-xs font-semibold text-muted-foreground">
-                    <span className="size-1.5 rounded-full bg-muted-foreground/60" />
-                    {header.status}
-                    {header.protocol ? ` — ${header.protocol}` : ''}
-                  </span>
-                ))}
-            </div>
-            <p className="text-[13px] leading-relaxed text-muted-foreground">
-              {demographics || 'No demographics on file'}
-            </p>
-            {header.flags.length > 0 && (
-              <div className="flex flex-wrap items-center gap-2">
-                {header.flags.map((flag) => (
-                  <Badge key={flag} variant="destructive">
-                    {flag}
-                  </Badge>
-                ))}
+        {/* No `overflow-hidden` here: the Assign and More-actions dropdowns are
+            positioned absolutely inside this card and would be clipped. */}
+        <section className="rounded-xl border bg-card">
+          <div className="flex flex-wrap items-start justify-between gap-4 px-5 py-4">
+            <div className="flex min-w-0 flex-col gap-2">
+              <div className="flex flex-wrap items-center gap-3">
+                <h1 className="text-xl font-semibold tracking-tight">{header.name}</h1>
+                {header.status &&
+                  (statusTone(header.status) === 'active' ? (
+                    <span className="inline-flex items-center gap-1.5 rounded-full border border-green-200 bg-green-50 px-2.5 py-1 text-xs font-semibold text-green-700">
+                      <span className="size-1.5 rounded-full bg-green-500" />
+                      {header.status}
+                      {header.protocol ? ` — ${header.protocol}` : ''}
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1.5 rounded-full border bg-muted px-2.5 py-1 text-xs font-semibold text-muted-foreground">
+                      <span className="size-1.5 rounded-full bg-muted-foreground/60" />
+                      {header.status}
+                      {header.protocol ? ` — ${header.protocol}` : ''}
+                    </span>
+                  ))}
               </div>
-            )}
-          </div>
-
-          <div className="relative flex shrink-0 items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                setAssignOpen((v) => !v)
-                setActionsOpen(false)
-              }}
-            >
-              {assignedToName ? <Check /> : <UserPlus />}
-              {assignedToName ? `Assigned · ${assignedToName}` : 'Assign'}
-            </Button>
-
-            <Button variant="outline" size="sm" onClick={() => setReviewOpen(true)}>
-              {finalized ? <Check /> : null}
-              {finalized ? 'Finalized' : 'Mark complete'}
-            </Button>
-
-            <Button
-              variant="outline"
-              size="icon-sm"
-              aria-label="More actions"
-              onClick={() => {
-                setActionsOpen((v) => !v)
-                setAssignOpen(false)
-              }}
-            >
-              <MoreHorizontal />
-            </Button>
-
-            {assignOpen && (
-              <div className="absolute top-10 right-0 z-40 w-72 rounded-lg border bg-card p-3.5 shadow-lg">
-                <span className="text-xs font-bold tracking-wider text-muted-foreground">
-                  ASSIGN TO PROVIDER
-                </span>
-                <p className="mt-2 text-xs text-muted-foreground">
-                  Assignment lands in the next change — it writes
-                  <code className="mx-1 rounded bg-muted px-1">lab_reviews.assigned_to</code>,
-                  which already exists.
-                </p>
-                <Textarea
-                  className="mt-2.5"
-                  rows={2}
-                  disabled
-                  placeholder="Optional instructions for the provider…"
-                  aria-label="Instructions for the provider"
-                />
-                <p className="mt-1.5 text-xs text-muted-foreground">
-                  {STATIC_NOTICES.assignInstructions}
-                </p>
-              </div>
-            )}
-
-            {actionsOpen && (
-              <div className="absolute top-10 right-0 z-40 flex w-64 flex-col rounded-lg border bg-card p-1.5 shadow-lg">
-                {MORE_ACTIONS.map((action) => (
-                  <span
-                    key={action.id}
-                    className="flex items-center justify-between gap-2 rounded-md px-2.5 py-2 text-[13px] text-muted-foreground"
-                  >
-                    {action.label}
-                    <Badge variant="secondary">
-                      {action.static ? 'Not wired' : 'Next change'}
+              <p className="text-[13px] leading-relaxed text-muted-foreground">
+                {demographics || 'No demographics on file'}
+              </p>
+              {header.flags.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2">
+                  {header.flags.map((flag) => (
+                    <Badge key={flag} variant="destructive">
+                      {flag}
                     </Badge>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="relative flex shrink-0 items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={pending || finalized}
+                onClick={() => {
+                  setAssignOpen((v) => !v)
+                  setActionsOpen(false)
+                }}
+              >
+                {assignedToName ? <Check /> : <UserPlus />}
+                {assignedToName
+                  ? mine
+                    ? 'Assigned · you'
+                    : `Assigned · ${assignedToName}`
+                  : 'Assign'}
+              </Button>
+
+              {finalized ? (
+                <Button variant="outline" size="sm" disabled>
+                  <Check />
+                  Finalized
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  disabled={pending}
+                  onClick={started ? () => setReviewOpen(true) : start}
+                >
+                  {started ? null : <Play />}
+                  {started ? 'Continue review' : 'Start Lab Review'}
+                </Button>
+              )}
+
+              <Button
+                variant="outline"
+                size="icon-sm"
+                aria-label="More actions"
+                onClick={() => {
+                  setActionsOpen((v) => !v)
+                  setAssignOpen(false)
+                }}
+              >
+                <MoreHorizontal />
+              </Button>
+
+              {assignOpen && (
+                <div className="absolute top-10 right-0 z-40 flex w-72 flex-col rounded-lg border bg-card p-1.5 shadow-lg">
+                  <span className="px-2 py-1.5 text-xs font-bold tracking-wider text-muted-foreground">
+                    ASSIGN TO PROVIDER
                   </span>
-                ))}
-              </div>
+                  {providers.length === 0 ? (
+                    <p className="px-2 py-1.5 text-xs text-muted-foreground">
+                      No provider accounts found.
+                    </p>
+                  ) : (
+                    providers.map((provider) => (
+                      <button
+                        key={provider.userId}
+                        type="button"
+                        disabled={pending || provider.userId === assignedTo}
+                        onClick={() => reassign(provider.userId)}
+                        className="flex items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-[13px] hover:bg-muted disabled:text-muted-foreground disabled:hover:bg-transparent"
+                      >
+                        {provider.name}
+                        {provider.userId === assignedTo && <Check className="size-3.5" />}
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
+
+              {actionsOpen && (
+                <div className="absolute top-10 right-0 z-40 flex w-64 flex-col rounded-lg border bg-card p-1.5 shadow-lg">
+                  <button
+                    type="button"
+                    disabled={pending || finalized}
+                    onClick={() => {
+                      setActionsOpen(false)
+                      setEscalateOpen(true)
+                    }}
+                    className="flex items-center gap-2 rounded-md px-2.5 py-2 text-left text-[13px] hover:bg-muted disabled:text-muted-foreground disabled:hover:bg-transparent"
+                  >
+                    <TriangleAlert className="size-3.5" />
+                    Mark needs attention
+                  </button>
+                  <button
+                    type="button"
+                    disabled={pending}
+                    onClick={() => {
+                      setActionsOpen(false)
+                      setOrderOpen(true)
+                    }}
+                    className="flex items-center gap-2 rounded-md px-2.5 py-2 text-left text-[13px] hover:bg-muted disabled:text-muted-foreground disabled:hover:bg-transparent"
+                  >
+                    <FlaskConical className="size-3.5" />
+                    Order labs
+                    {pendingLabCount > 0 && <Badge variant="secondary">{pendingLabCount}</Badge>}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={pending}
+                    onClick={() => {
+                      setActionsOpen(false)
+                      setConsultOpen(true)
+                    }}
+                    className="flex items-center gap-2 rounded-md px-2.5 py-2 text-left text-[13px] hover:bg-muted disabled:text-muted-foreground disabled:hover:bg-transparent"
+                  >
+                    <CalendarPlus className="size-3.5" />
+                    Request a consultation
+                  </button>
+                  {MORE_ACTIONS.map((action) => (
+                    <span
+                      key={action.id}
+                      className="flex items-center justify-between gap-2 rounded-md px-2.5 py-2 text-[13px] text-muted-foreground"
+                    >
+                      {action.label}
+                      <Badge variant="secondary">Not wired</Badge>
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {escalateOpen && (
+                <EscalatePanel
+                  reviewId={reviewId}
+                  providers={providers}
+                  currentAssignee={assignedTo}
+                  pending={pending}
+                  onCancel={() => setEscalateOpen(false)}
+                  onSubmit={escalate}
+                />
+              )}
+            </div>
+          </div>
+
+          <PatientSnapshot
+            medications={medications}
+            orders={orders}
+            consultations={consultations}
+          />
+        </section>
+
+        {reviewStatus === 'needs_attention' && needsAttentionReason && (
+          <p className="rounded-xl border border-amber-200 bg-amber-50 px-5 py-3 text-[13px] text-amber-900">
+            <span className="font-semibold">Needs attention:</span> {needsAttentionReason}
+          </p>
+        )}
+
+        {orderOpen && (
+          <OrderLabsPanel
+            patientState={header.state}
+            providers={labProviders}
+            existing={scheduledLabs}
+            pending={pending}
+            onSubmit={orderLabs}
+            onCancel={cancelOrder}
+            onClose={() => setOrderOpen(false)}
+          />
+        )}
+
+        {consultOpen && (
+          <RequestConsultPanel
+            patientEmail={header.email}
+            patientStatusId={header.statusId}
+            patientGender={header.gender}
+            consultations={consultations}
+            state={consult}
+            pending={pending}
+            onSubmit={requestConsult}
+            onClose={closeConsult}
+          />
+        )}
+
+        {(started || write.status !== 'idle') && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-xs">
+            {started && (
+              <span className="text-muted-foreground">
+                Started {shortDateTime(startedAt)}
+                {startedByName ? ` by ${startedByName}` : ''}
+              </span>
+            )}
+            {write.status === 'error' && (
+              <span role="alert" className="font-medium text-destructive">
+                {write.message}
+              </span>
+            )}
+            {write.status === 'ok' && write.warning && (
+              <span role="alert" className="font-medium text-amber-800">
+                {write.warning}
+              </span>
             )}
           </div>
-        </section>
+        )}
 
         <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-[1fr_400px] xl:items-stretch">
           <div className="overflow-hidden rounded-xl border bg-card">
-            <AiAnalysisCard
-              blocks={summaryBlocks}
+            <LabValuesCard
               analytes={analytes}
-              collections={analyteCollections}
               collectionDate={collectionDate}
+              sourceFileName={sourceFileName}
               summaryStatus={summaryStatus}
               summaryError={summaryError}
+              offReviewFile={offReviewFile}
+              shownFileName={shownFile?.name ?? null}
+              onBackToReviewFile={backToReviewFile}
             />
             <DocumentViewer file={shownFile} signedUrl={signedUrl} error={signError} />
           </div>
@@ -254,17 +572,18 @@ export function LabReviewScreen({
             is measured from the viewer alone, then stretched back over it.
             Sizing them by their own content instead would let a patient with a
             long history stretch the row past the page, and a hardcoded height
-            drifts the moment the AI card is expanded.
+            drifts the moment the values card grows a row.
           */}
           <div className="xl:relative">
             <DetailTabs
+              reviewId={reviewId}
               notes={notes}
               summaryBlocks={summaryBlocks}
               summaryGeneratedAt={summaryGeneratedAt}
-              medications={medications}
-              orders={orders}
               files={files}
               cs={cs}
+              events={events}
+              reviewNotes={reviewNotes}
               shownFileId={shownFile?.id ?? null}
               onShowFile={showFile}
             />
@@ -274,9 +593,20 @@ export function LabReviewScreen({
 
       {reviewOpen && (
         <ReviewModal
+          reviewId={reviewId}
           patientName={header.name}
+          patientStatus={header.status}
           collectionDate={collectionDate}
-          onClose={() => setReviewOpen(false)}
+          medications={medications}
+          catalog={catalog}
+          dosageOptions={dosageOptions}
+          initialDraft={draft}
+          draftUpdatedAt={draftUpdatedAt}
+          onClose={closeReview}
+          onFinalized={(warning) => {
+            setWrite(warning ? { status: 'ok', warning } : { status: 'ok' })
+            closeReview()
+          }}
         />
       )}
     </div>

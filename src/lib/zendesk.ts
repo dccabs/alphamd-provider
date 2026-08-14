@@ -1,5 +1,7 @@
 import 'server-only'
 
+import type { ReplyIdentity } from '@/lib/labReviews/replyIdentity'
+
 /**
  * Zendesk **send** path only.
  *
@@ -25,13 +27,20 @@ import 'server-only'
  * Even then Zendesk can still store the comment as internal, so the response
  * audit is checked and a warning is returned rather than reporting plain
  * success.
+ *
+ * On top of that the caller now *chooses* an identity — as themselves, or as the
+ * unnamed "AlphaMD Support" service account. Choosing `self` is a request, not a
+ * guarantee: the allowlist above can still route it to the service account, so
+ * the result reports `sentAs` and the composer says which one actually went out.
+ * That fallback used to be silent, which is exactly what made an explicit choice
+ * worth having.
  */
 
 const ZENDESK_DOMAIN = process.env.ZENDESK_DOMAIN || 'alphamd.zendesk.com'
 const ZENDESK_ACCOUNT_EMAIL = process.env.ZENDESK_API_EMAIL || 'alphaai@alphamd.org'
 
 export type ReplyResult =
-  | { ok: true; warning?: string }
+  | { ok: true; sentAs: ReplyIdentity; warning?: string }
   | { ok: false; error: string }
 
 function basicAuth(): string | null {
@@ -96,8 +105,10 @@ export async function replyToTicket(options: {
   body: string
   /** The signed-in provider. Used only to try to attribute the comment. */
   authorEmail: string
+  /** Defaults to `self` so existing callers keep attributing where they can. */
+  as?: ReplyIdentity
 }): Promise<ReplyResult> {
-  const { ticketId, body, authorEmail } = options
+  const { ticketId, body, authorEmail, as = 'self' } = options
 
   if (!body.trim()) return { ok: false, error: 'Message is empty.' }
   if (!ticketId) return { ok: false, error: 'No Zendesk ticket to reply to.' }
@@ -107,7 +118,10 @@ export async function replyToTicket(options: {
     return { ok: false, error: 'Zendesk is not configured (ZENDESK_API_TOKEN is unset).' }
   }
 
-  const authorId = await publicCapableAuthorId(authorEmail, auth)
+  // Asking for `support` skips the lookup entirely: an omitted `author_id` is
+  // what makes Zendesk attribute the comment to the service account.
+  const authorId = as === 'self' ? await publicCapableAuthorId(authorEmail, auth) : null
+  const sentAs: ReplyIdentity = authorId ? 'self' : 'support'
 
   const comment: { html_body: string; public: true; author_id?: number } = {
     html_body: toHtml(body.trim()),
@@ -138,10 +152,20 @@ export async function replyToTicket(options: {
   if (commentEvent?.public === false) {
     return {
       ok: true,
+      sentAs,
       warning:
         'Zendesk stored this reply as an internal note, so the patient will NOT receive it. Do not resend — ask an admin to check your Zendesk seat.',
     }
   }
 
-  return { ok: true }
+  if (as === 'self' && sentAs === 'support') {
+    return {
+      ok: true,
+      sentAs,
+      warning:
+        'Sent as AlphaMD Support, not under your name — your Zendesk seat cannot author public replies. The patient did receive it.',
+    }
+  }
+
+  return { ok: true, sentAs }
 }

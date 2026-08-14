@@ -6,7 +6,7 @@ import { CornerDownLeft, EyeOff, Paperclip, Send } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
 import { SummaryBlocks } from '@/components/summary-blocks'
 import { shortDate, shortDateTime } from '@/lib/labReviews/format'
 import {
@@ -17,38 +17,60 @@ import {
   type NoteFilter,
 } from '@/lib/labReviews/notes'
 import type { Block } from '@/lib/labReviews/summaryMarkdown'
+import {
+  DEFAULT_REPLY_IDENTITY,
+  REPLY_IDENTITIES,
+  REPLY_IDENTITY_LABELS,
+  type ReplyIdentity,
+} from '@/lib/labReviews/replyIdentity'
 import { sendCsReplyAction, type ReplyState } from '../actions'
-import type { CsInbox, CsMessage, CsThread, Medication, Order, PatientFile } from './types'
+import { AssistButton } from './AssistButton'
+import type {
+  CsInbox,
+  CsMessage,
+  CsThread,
+  LabReviewEvent,
+  LabReviewNote,
+  PatientFile,
+} from './types'
 
-type TabId = 'ai' | 'notes' | 'meds' | 'orders' | 'files' | 'messages'
+/**
+ * Medications, orders and consultations used to be tabs here. They now live in
+ * the patient header, where the clinical picture is read before the labs rather
+ * than hunted for — see `PatientSnapshot`.
+ */
+type TabId = 'ai' | 'notes' | 'files' | 'messages' | 'activity'
 
 const TAB_TITLES: Record<TabId, string> = {
   ai: 'AI Summary',
   notes: 'Notes',
-  meds: 'Medications',
-  orders: 'Order history',
   files: 'Patient files',
   messages: 'Message threads',
+  activity: 'Review history',
 }
 
 export function DetailTabs({
+  reviewId,
   notes,
   summaryBlocks,
   summaryGeneratedAt,
-  medications,
-  orders,
   files,
   cs,
+  events,
+  reviewNotes,
   shownFileId,
   onShowFile,
 }: {
+  /** Carried down to the reply composer, whose AI assist resolves the patient
+   *  from the review rather than being handed a patient id. */
+  reviewId: string
   notes: Note[]
   summaryBlocks: Block[]
   summaryGeneratedAt: string | null
-  medications: Medication[]
-  orders: Order[]
   files: PatientFile[]
   cs: CsInbox
+  events: LabReviewEvent[]
+  reviewNotes: LabReviewNote[]
   shownFileId: number | null
   onShowFile: (file: PatientFile) => void
 }) {
@@ -57,14 +79,18 @@ export function DetailTabs({
 
   const visibleNotes = useMemo(() => filterNotes(notes, noteFilter), [notes, noteFilter])
 
-  // Badge counts come from the data, not from a prop the design hardcoded.
+  // Badge counts come from the data, not from a prop the design hardcoded. Each
+  // one is how many items the tab holds, so the strip says what is in the record
+  // at a glance. Notes follows the All/Provider filter rather than being pinned
+  // to the provider count, so the badge always matches what is on screen.
   const tabs: { id: TabId; label: string; badge?: number; urgent?: boolean }[] = [
     { id: 'ai', label: 'AI' },
-    { id: 'notes', label: 'Notes', badge: filterNotes(notes, 'provider').length },
-    { id: 'meds', label: 'Meds' },
-    { id: 'orders', label: 'Orders' },
-    { id: 'files', label: 'Files' },
-    { id: 'messages', label: 'Messages', badge: cs.unreadCount, urgent: true },
+    { id: 'notes', label: 'Notes', badge: visibleNotes.length },
+    { id: 'files', label: 'Files', badge: files.length },
+    // Threads, not messages: the count is how many conversations are open. Unread
+    // patient replies still turn it red, which is the part that needs answering.
+    { id: 'messages', label: 'Messages', badge: cs.threads.length, urgent: cs.unreadCount > 0 },
+    { id: 'activity', label: 'History' },
   ]
 
   return (
@@ -125,12 +151,11 @@ export function DetailTabs({
           <AiTab blocks={summaryBlocks} generatedAt={summaryGeneratedAt} />
         )}
         {tab === 'notes' && <NotesList notes={visibleNotes} filter={noteFilter} />}
-        {tab === 'meds' && <MedsList medications={medications} />}
-        {tab === 'orders' && <OrdersList orders={orders} />}
         {tab === 'files' && (
           <FilesList files={files} shownFileId={shownFileId} onShowFile={onShowFile} />
         )}
-        {tab === 'messages' && <MessagesList inbox={cs} />}
+        {tab === 'messages' && <MessagesList reviewId={reviewId} inbox={cs} />}
+        {tab === 'activity' && <ActivityList events={events} reviewNotes={reviewNotes} />}
       </div>
     </section>
   )
@@ -198,79 +223,6 @@ function AiTab({ blocks, generatedAt }: { blocks: Block[]; generatedAt: string |
   )
 }
 
-function MedsList({ medications }: { medications: Medication[] }) {
-  if (!medications.length) return <EmptyState>No medications on record.</EmptyState>
-
-  return (
-    <ul className="flex flex-col">
-      {medications.map((med) => (
-        <li key={med.id} className="flex items-center justify-between gap-3 border-b px-4 py-3">
-          <div className="min-w-0">
-            <div className={`text-[13px] font-semibold ${med.active ? '' : 'text-muted-foreground'}`}>
-              {med.name}
-            </div>
-            <div className="mt-0.5 text-xs text-muted-foreground">
-              {[med.dosage, med.pharmacy, med.startedAt ? `started ${shortDate(med.startedAt)}` : null]
-                .filter(Boolean)
-                .join(' · ') || 'No dosage recorded'}
-            </div>
-          </div>
-          <Badge variant={med.active ? 'default' : 'secondary'}>
-            {med.active ? 'Active' : 'Expired'}
-          </Badge>
-        </li>
-      ))}
-    </ul>
-  )
-}
-
-/**
- * What was ordered leads, because that is what a provider reading labs needs —
- * the date and pharmacy are context for it. Order contents are freeform staff
- * text, so a line is only ever emphasised when it split cleanly into a name and
- * a sig; see `orderContentLines`.
- */
-function OrdersList({ orders }: { orders: Order[] }) {
-  if (!orders.length) return <EmptyState>No orders on record.</EmptyState>
-
-  return (
-    <ul className="flex flex-col">
-      {orders.map((order) => (
-        <li key={order.id} className="flex items-start justify-between gap-3 border-b px-4 py-3">
-          <div className="min-w-0">
-            <div className="text-xs text-muted-foreground">
-              {[
-                order.orderDate ? shortDate(order.orderDate) : null,
-                order.pharmacy,
-                order.orderNumber ? `#${order.orderNumber}` : null,
-              ]
-                .filter(Boolean)
-                .join(' · ') || 'Order'}
-            </div>
-
-            {order.contents.length ? (
-              <ul className="mt-1 flex flex-col gap-0.5">
-                {order.contents.map((line, i) => (
-                  <li key={i} className="text-[13px] leading-relaxed">
-                    {line.name && <span className="font-semibold">{line.name}</span>}
-                    {line.name && ' — '}
-                    <span className="text-muted-foreground">{line.detail}</span>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="mt-1 text-[13px] text-muted-foreground italic">
-                No contents recorded on this order.
-              </p>
-            )}
-          </div>
-          {order.status && <Badge variant="secondary">{order.status}</Badge>}
-        </li>
-      ))}
-    </ul>
-  )
-}
-
 function FilesList({
   files,
   shownFileId,
@@ -289,25 +241,26 @@ function FilesList({
         return (
           <div key={file.id} className="flex items-center justify-between gap-3 border-b px-4 py-3">
             <div className="min-w-0">
-              <div className="flex items-center gap-2 text-[13px] font-semibold">
-                <span className="truncate">{file.name}</span>
-                {shown && (
-                  <span className="shrink-0 rounded border border-green-200 bg-green-50 px-1.5 py-px text-[10px] font-bold tracking-wider text-green-700">
-                    SHOWN
-                  </span>
-                )}
-              </div>
+              <div className="truncate text-[13px] font-semibold">{file.name}</div>
               <div className="mt-0.5 text-xs text-muted-foreground">
                 {[file.kindLabel, shortDate(file.createdAt), file.description]
                   .filter(Boolean)
                   .join(' · ')}
               </div>
             </div>
-            {!shown && (
-              <Button variant="outline" size="sm" onClick={() => onShowFile(file)}>
-                View
-              </Button>
-            )}
+            {/* The badge takes the button's place rather than sitting beside the
+                file name, so selecting a file does not reflow the row it is in. */}
+            <div className="flex w-14 shrink-0 justify-end">
+              {shown ? (
+                <span className="rounded border border-green-200 bg-green-50 px-1.5 py-px text-[10px] font-bold tracking-wider text-green-700">
+                  SHOWN
+                </span>
+              ) : (
+                <Button variant="outline" size="sm" onClick={() => onShowFile(file)}>
+                  View
+                </Button>
+              )}
+            </div>
           </div>
         )
       })}
@@ -315,6 +268,80 @@ function FilesList({
         Viewing a file loads it into the main viewer for quick past-lab comparison.
       </p>
     </div>
+  )
+}
+
+/**
+ * The audit trail for this review, newest first, with the handoff notes above it.
+ *
+ * The notes lead because they are the part somebody picking up a parked review
+ * actually needs to read; the trail below is what they consult once they want to
+ * know how it got here. `summary` is written at the time of each change, so the
+ * trail reads as history rather than as a re-derivation of the current state.
+ */
+function ActivityList({
+  events,
+  reviewNotes,
+}: {
+  events: LabReviewEvent[]
+  reviewNotes: LabReviewNote[]
+}) {
+  if (!events.length && !reviewNotes.length) {
+    return (
+      <EmptyState>
+        Nothing has happened to this review yet. Starting it is the first entry.
+      </EmptyState>
+    )
+  }
+
+  return (
+    <>
+      {reviewNotes.length > 0 && (
+        <ul className="flex flex-col border-b bg-amber-50/40">
+          {reviewNotes.map((note) => (
+            <li key={note.id} className="flex flex-col gap-1 border-b border-amber-100 px-4 py-3">
+              <div className="flex items-center gap-2">
+                <span className="rounded border border-amber-200 bg-amber-100 px-1.5 py-px text-[9.5px] font-bold tracking-wider text-amber-900">
+                  {note.kind.replace(/_/g, ' ').toUpperCase()}
+                </span>
+                {note.aiAssisted && <Badge variant="secondary">AI assisted</Badge>}
+                <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                  {shortDateTime(note.createdAt)}
+                </span>
+              </div>
+              <p className="text-[13px] leading-relaxed whitespace-pre-wrap">{note.note}</p>
+              {note.authorName && (
+                <span className="text-xs text-muted-foreground">{note.authorName}</span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <ul className="flex flex-col">
+        {events.map((event) => (
+          <li key={event.id} className="flex flex-col gap-1 border-b px-4 py-3">
+            <div className="flex items-center gap-2">
+              <span className="rounded border border-border bg-muted px-1.5 py-px text-[9.5px] font-bold tracking-wider text-muted-foreground">
+                {event.eventType.replace(/_/g, ' ').toUpperCase()}
+              </span>
+              <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                {shortDateTime(event.createdAt)}
+              </span>
+            </div>
+            <p className="text-[13px] leading-relaxed">
+              {event.summary ?? 'No description recorded.'}
+            </p>
+            {event.actorName && (
+              <span className="text-xs text-muted-foreground">
+                {event.actorName}
+                {event.actorRole ? ` · ${event.actorRole}` : ''}
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </>
   )
 }
 
@@ -335,7 +362,7 @@ const MESSAGE_ROLE_STYLE: Record<CsMessage['role'], string> = {
   PATIENT: 'border-border bg-muted text-muted-foreground',
 }
 
-function MessagesList({ inbox }: { inbox: CsInbox }) {
+function MessagesList({ reviewId, inbox }: { reviewId: string; inbox: CsInbox }) {
   if (!inbox.threads.length) return <EmptyState>No messages for this patient.</EmptyState>
 
   return (
@@ -343,21 +370,41 @@ function MessagesList({ inbox }: { inbox: CsInbox }) {
       {inbox.threads.map((thread, i) => (
         // The newest thread is the one a provider almost always answers, so its
         // composer is open on arrival and the rest are one click away.
-        <MessageThread key={thread.ticketId} thread={thread} defaultComposing={i === 0} />
+        <MessageThread
+          key={thread.ticketId}
+          reviewId={reviewId}
+          thread={thread}
+          defaultComposing={i === 0}
+        />
       ))}
     </ul>
   )
 }
 
 function MessageThread({
+  reviewId,
   thread,
   defaultComposing,
 }: {
+  reviewId: string
   thread: CsThread
   defaultComposing: boolean
 }) {
   const [state, formAction] = useActionState(sendCsReplyAction, INITIAL_REPLY)
   const [composing, setComposing] = useState(defaultComposing)
+  const [sendAs, setSendAs] = useState<ReplyIdentity>(DEFAULT_REPLY_IDENTITY)
+  const [body, setBody] = useState('')
+  const [handled, setHandled] = useState<ReplyState>(INITIAL_REPLY)
+
+  // Emptying the box once a send succeeds — what the `key` remount did while the
+  // field was uncontrolled. Adjusted during render rather than in an effect so
+  // the cleared box is never painted with the old text still in it. `state` is a
+  // fresh object per action result, so this runs once per send and does not wipe
+  // anything typed afterwards.
+  if (state !== handled) {
+    setHandled(state)
+    if (state.status === 'sent') setBody('')
+  }
 
   // The mirror table is written by a webhook Zendesk fires at alphamd, which
   // this app does not own, so a sent reply does not appear in `messages` for a
@@ -388,7 +435,11 @@ function MessageThread({
               >
                 PROVIDER
               </span>
-              <span className="ml-auto text-xs text-muted-foreground">Sent · syncing</span>
+              <span className="ml-auto text-xs text-muted-foreground">
+                {state.sentAs
+                  ? `Sent ${REPLY_IDENTITY_LABELS[state.sentAs]} · syncing`
+                  : 'Sent · syncing'}
+              </span>
             </div>
             <p className="text-[13px] leading-relaxed whitespace-pre-wrap text-muted-foreground">
               {optimistic}
@@ -409,15 +460,44 @@ function MessageThread({
       )}
 
       {composing ? (
-        <form action={formAction} className="flex gap-2 px-4 py-3">
+        <form action={formAction} className="flex flex-col gap-2 px-4 py-3">
           <input type="hidden" name="ticketId" value={thread.ticketId} />
-          <Input
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            Send
+            <select
+              name="sendAs"
+              value={sendAs}
+              onChange={(e) => setSendAs(e.target.value as ReplyIdentity)}
+              aria-label="Who this reply is sent as"
+              className="h-7 rounded-lg border border-input bg-transparent px-2 py-0.5 text-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+            >
+              {REPLY_IDENTITIES.map((identity) => (
+                <option key={identity} value={identity}>
+                  {REPLY_IDENTITY_LABELS[identity]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <Textarea
             name="body"
-            key={state.status === 'sent' ? `sent-${optimistic?.length}` : 'compose'}
+            rows={3}
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
             placeholder="Reply to this thread…"
             aria-label={`Reply to ${thread.subject}`}
           />
-          <SendButton />
+          <div className="flex items-start justify-between gap-2">
+            {/* The identity is passed through: a reply signed by the provider and
+                one signed by AlphaMD Support are written differently. */}
+            <AssistButton
+              reviewId={reviewId}
+              task="cs_reply"
+              value={body}
+              onChange={setBody}
+              identity={sendAs}
+            />
+            <SendButton />
+          </div>
         </form>
       ) : (
         <div className="px-4 py-2">

@@ -39,21 +39,47 @@ function DialogOverlay({
   )
 }
 
+/**
+ * Where the dialog sits, and how it gets there. Position and animation are one
+ * variant on purpose: a panel that slides in from an edge has to be anchored to
+ * the edge it slides from, and splitting the two is how you end up with a sheet
+ * that zooms.
+ *
+ * `slide-in-from-right` translates by a full 100%, so the panel travels its own
+ * width. That works because the resting position comes from `top`/`right` rather
+ * than a transform — the enter keyframe animates from the entering transform to
+ * the element's own, so a panel with no transform lands flush against the edge.
+ * `duration-200` overrides the shared 100ms, which is too quick to read as a
+ * slide across a wide sheet.
+ */
+const SIDE_CLASSES: Record<"center" | "right", string> = {
+  center:
+    "top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 sm:max-w-sm data-open:zoom-in-95 data-closed:zoom-out-95",
+  right:
+    "top-0 right-0 h-dvh rounded-none duration-200 data-open:slide-in-from-right data-closed:slide-out-to-right",
+}
+
 function DialogContent({
   className,
   children,
   showCloseButton = true,
+  side = "center",
+  showOverlay = true,
   ...props
 }: DialogPrimitive.Popup.Props & {
   showCloseButton?: boolean
+  side?: "center" | "right"
+  /** Off for a sheet that has to leave the page behind it readable and clickable. */
+  showOverlay?: boolean
 }) {
   return (
     <DialogPortal>
-      <DialogOverlay />
+      {showOverlay && <DialogOverlay />}
       <DialogPrimitive.Popup
         data-slot="dialog-content"
         className={cn(
-          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          "fixed z-50 grid w-full max-w-[calc(100%-2rem)] gap-4 rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
+          SIDE_CLASSES[side],
           className
         )}
         {...props}

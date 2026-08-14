@@ -1,6 +1,15 @@
 import 'server-only'
 
+import { ROLE } from '@/lib/authz'
 import { createAdminClient } from '@/lib/supabase/admin'
+import {
+  latestCollection,
+  orderAnalytes,
+  type Analyte,
+  type AnalyteCollection,
+} from './analytes'
+import { RESTRICTED_MEDICATION_IDS } from './clinicalIds'
+import { parseDraft, type ReviewDraft } from './reviewDraft'
 
 /**
  * Reads for the lab-review queue and detail screens.
@@ -40,6 +49,13 @@ export type LabReviewDetail = {
   summaryError: string | null
   assignedTo: string | null
   assignedToName: string | null
+  /** Set on the *first* start and never overwritten — see `startLabReview`. */
+  startedAt: string | null
+  startedByName: string | null
+  /** Autosaved work in progress. Always a valid draft: `parseDraft` degrades a
+   *  malformed column to an empty one rather than throwing. */
+  draft: ReviewDraft
+  draftUpdatedAt: string | null
   resolution: string | null
   reviewedAt: string | null
   needsAttentionReason: string | null
@@ -51,29 +67,47 @@ export type LabReviewDetail = {
   sources: LabReviewSource[]
 }
 
+export type ProviderOption = {
+  userId: string
+  name: string
+}
+
+/**
+ * Who a review may be handed to.
+ *
+ * Role 3 in `user_roles_join`, matching `checkProviderAccess` — 10 accounts in
+ * production. `user_list.role` is not consulted, for the reason in the README.
+ */
+export async function listProviders(): Promise<ProviderOption[]> {
+  const admin = createAdminClient()
+
+  const { data, error } = await admin
+    .from('user_roles_join')
+    .select('user_id')
+    .eq('role', ROLE.provider)
+  if (error) throw new Error(`provider lookup failed: ${error.message}`)
+
+  const ids = [...new Set((data ?? []).map((r) => r.user_id as string).filter(Boolean))]
+  if (!ids.length) return []
+
+  const names = await namesFor(ids, 'Unnamed provider')
+
+  return ids
+    .map((userId) => ({ userId, name: names.get(userId) ?? 'Unnamed provider' }))
+    .sort((a, b) => a.name.localeCompare(b.name))
+}
+
 export type LabReviewReport = {
   id: string
   patientName: string | null
   patientSummary: string | null
   createdAt: string | null
+  /** The latest collection's values only. Older collections are read to find it
+   *  and then dropped: a retest arrives as its own collection beside the panel it
+   *  followed, and showing both invites reading a stale value as the current one. */
   analytes: Analyte[]
   collectionDate: string | null
   sourceFileName: string | null
-  collections: AnalyteCollection[]
-}
-
-/** One extracted lab value. There is deliberately no high/low flag: the stored
- *  JSON has display strings only, and no reference-range table exists anywhere
- *  in the database — see the AI chips note in the README. */
-export type Analyte = { name: string; value: string }
-
-/** One lab file's worth of extracted values. The header chips only ever show
- *  the latest, but 74 reports in production carry two to six collections and
- *  the full list is what the "+N more" dialog is for. */
-export type AnalyteCollection = {
-  collectionDate: string | null
-  fileName: string | null
-  analytes: Analyte[]
 }
 
 export type LabReviewSource = {
@@ -99,7 +133,13 @@ function fullName(row: NameRow | undefined, fallback = 'Unknown patient'): strin
   return name || fallback
 }
 
-async function namesFor(userIds: string[]): Promise<Map<string, string>> {
+/** Display names for a set of user ids. Ids with no `user_list` row are absent
+ *  from the map rather than present with a placeholder, so callers can tell
+ *  "nobody recorded" from "recorded but unnamed". */
+export async function namesFor(
+  userIds: string[],
+  fallback = 'Unknown patient'
+): Promise<Map<string, string>> {
   const unique = [...new Set(userIds.filter(Boolean))]
   if (!unique.length) return new Map()
 
@@ -110,7 +150,7 @@ async function namesFor(userIds: string[]): Promise<Map<string, string>> {
     .in('user_id', unique)
   if (error) throw new Error(`user_list lookup failed: ${error.message}`)
 
-  return new Map((data ?? []).map((r) => [r.user_id as string, fullName(r as NameRow)]))
+  return new Map((data ?? []).map((r) => [r.user_id as string, fullName(r as NameRow, fallback)]))
 }
 
 export async function listLabReviews(status: LabReviewStatus): Promise<QueueRow[]> {
@@ -162,6 +202,41 @@ export async function listLabReviews(status: LabReviewStatus): Promise<QueueRow[
   }))
 }
 
+export type QueueSummary = {
+  /** Active and needs-attention reviews this provider owns, newest first. */
+  mine: QueueRow[]
+  /** Active reviews nobody has claimed. */
+  unassigned: QueueRow[]
+  /** Claimed by somebody else — a count only; another provider's workload is
+   *  not this screen's business beyond knowing the queue is being worked. */
+  assignedElsewhere: number
+  needsAttention: number
+}
+
+/**
+ * The landing page's view of the queue.
+ *
+ * Deliberately derived from the same `listLabReviews` the queue page uses
+ * rather than its own aggregate query, so the dashboard can never disagree
+ * with the list it links to. The queue is small — 55 rows in production — so
+ * two full reads cost less than the risk of two orderings drifting apart.
+ */
+export async function getQueueSummary(viewerId: string): Promise<QueueSummary> {
+  const [active, needsAttention] = await Promise.all([
+    listLabReviews('active'),
+    listLabReviews('needs_attention'),
+  ])
+
+  const mineFrom = (rows: QueueRow[]) => rows.filter((r) => r.assignedTo === viewerId)
+
+  return {
+    mine: [...mineFrom(needsAttention), ...mineFrom(active)],
+    unassigned: active.filter((r) => !r.assignedTo),
+    assignedElsewhere: active.filter((r) => r.assignedTo && r.assignedTo !== viewerId).length,
+    needsAttention: needsAttention.length,
+  }
+}
+
 /** Active flag names per patient. `user_flags`/`user_flags_join` have no RLS,
  *  but they are read here through the same client for consistency. */
 async function listFlagsFor(patientIds: string[]): Promise<Map<string, string[]>> {
@@ -194,15 +269,15 @@ function parseAnalytes(json: unknown): {
   analytes: Analyte[]
   collectionDate: string | null
   sourceFileName: string | null
-  collections: AnalyteCollection[]
 } {
-  const empty = { analytes: [], collectionDate: null, sourceFileName: null, collections: [] }
+  const empty = { analytes: [], collectionDate: null, sourceFileName: null }
   if (!json || typeof json !== 'object') return empty
 
   const results = (json as { labResults?: unknown }).labResults
   if (!Array.isArray(results) || !results.length) return empty
 
-  // The extractor emits one entry per lab file, most recent first.
+  // One entry per result set the extractor processed, in no reliable order — see
+  // `latestCollection`.
   const collections: AnalyteCollection[] = results.map((raw) => {
     const entry = (raw ?? {}) as {
       values?: Record<string, unknown>
@@ -213,22 +288,25 @@ function parseAnalytes(json: unknown): {
     return {
       collectionDate: typeof entry.collectionDate === 'string' ? entry.collectionDate : null,
       fileName: typeof entry.fileName === 'string' ? entry.fileName : null,
-      analytes: Object.entries(entry.values ?? {})
-        // Every entry carries all nine panel keys, and a null means the
-        // extractor did not find that analyte. Dropping it is correct —
-        // rendering it would print the string "null" on a lab screen.
-        .filter(([, v]) => typeof v === 'string' && v.trim())
-        .map(([name, v]) => ({ name, value: (v as string).trim() })),
+      // jsonb has already lost whatever order the extractor wrote, so reading
+      // order has to be restored here — see `analytes.ts`.
+      analytes: orderAnalytes(
+        Object.entries(entry.values ?? {})
+          // Every entry carries all nine panel keys, and a null means the
+          // extractor did not find that analyte. Dropping it is correct —
+          // rendering it would print the string "null" on a lab screen.
+          .filter(([, v]) => typeof v === 'string' && v.trim())
+          .map(([name, v]) => ({ name, value: (v as string).trim() }))
+      ),
     }
   })
 
-  const latest = collections[0]
+  const latest = latestCollection(collections)
 
   return {
-    analytes: latest.analytes,
-    collectionDate: latest.collectionDate,
-    sourceFileName: latest.fileName,
-    collections,
+    analytes: latest?.analytes ?? [],
+    collectionDate: latest?.collectionDate ?? null,
+    sourceFileName: latest?.fileName ?? null,
   }
 }
 
@@ -238,7 +316,7 @@ export async function getLabReview(id: string): Promise<LabReviewDetail | null> 
   const { data: review, error } = await admin
     .from('lab_reviews')
     .select(
-      'id, patient_id, status, summary_status, summary_error, assigned_to, resolution, reviewed_at, needs_attention_reason, report_id, last_source_at, created_at'
+      'id, patient_id, status, summary_status, summary_error, assigned_to, started_at, started_by, draft, draft_updated_at, resolution, reviewed_at, needs_attention_reason, report_id, last_source_at, created_at'
     )
     .eq('id', id)
     .maybeSingle()
@@ -260,7 +338,13 @@ export async function getLabReview(id: string): Promise<LabReviewDetail | null> 
             .eq('id', review.report_id as string)
             .maybeSingle()
         : Promise.resolve({ data: null, error: null }),
-      namesFor([review.patient_id as string, review.assigned_to as string].filter(Boolean)),
+      namesFor(
+        [
+          review.patient_id as string,
+          review.assigned_to as string,
+          review.started_by as string,
+        ].filter(Boolean)
+      ),
     ])
 
   if (siblingsError) throw new Error(`queue position query failed: ${siblingsError.message}`)
@@ -294,6 +378,12 @@ export async function getLabReview(id: string): Promise<LabReviewDetail | null> 
     assignedToName: review.assigned_to
       ? (names.get(review.assigned_to as string) ?? null)
       : null,
+    startedAt: (review.started_at as string | null) ?? null,
+    startedByName: review.started_by
+      ? (names.get(review.started_by as string) ?? null)
+      : null,
+    draft: parseDraft(review.draft),
+    draftUpdatedAt: (review.draft_updated_at as string | null) ?? null,
     resolution: (review.resolution as string | null) ?? null,
     reviewedAt: (review.reviewed_at as string | null) ?? null,
     needsAttentionReason: (review.needs_attention_reason as string | null) ?? null,
@@ -308,7 +398,6 @@ export async function getLabReview(id: string): Promise<LabReviewDetail | null> 
           patientSummary: reportRow.patient_summary,
           createdAt: reportRow.created_at,
           analytes: extracted!.analytes,
-          collections: extracted!.collections,
           collectionDate: extracted!.collectionDate,
           sourceFileName: extracted!.sourceFileName,
         }
@@ -326,12 +415,20 @@ export type PatientHeader = {
   patientId: string
   name: string
   status: string | null
+  /** The raw `user_list.status` id behind that label. Carried because two features
+   *  branch on it numerically — which dispositions apply, and which consultation
+   *  types suit the patient — and re-deriving it from the label would break the
+   *  moment somebody edits `user_statuses`. */
+  statusId: number | null
   age: number | null
   gender: string | null
   dateOfBirth: string | null
   phone: string | null
   email: string | null
   address: string | null
+  /** Carried separately from the formatted address because it decides whether
+   *  discounted labs may be offered — New York and New Jersey prohibit them. */
+  state: string | null
   flags: string[]
   protocol: string | null
 }
@@ -383,6 +480,7 @@ export async function getPatientHeader(patientId: string): Promise<PatientHeader
     patientId,
     name: fullName(data as NameRow),
     status: statusLabel,
+    statusId: data.status === null || data.status === undefined ? null : Number(data.status),
     age: ageFrom(data.date_of_birth as string | null),
     gender: (data.gender as string | null) ?? null,
     dateOfBirth: (data.date_of_birth as string | null) ?? null,
@@ -396,6 +494,7 @@ export async function getPatientHeader(patientId: string): Promise<PatientHeader
         zip_code: string | null
       }
     ),
+    state: (data.state as string | null) ?? null,
     flags,
     protocol,
   }
@@ -430,6 +529,9 @@ async function activeProtocolLabel(patientId: string): Promise<string | null> {
 
 export type Medication = {
   id: number
+  /** `medications_list.id` — the catalog entry, not this patient's row. What the
+   *  dosing options are keyed by. */
+  medicationId: number
   name: string
   type: string | null
   dosage: string | null
@@ -453,7 +555,7 @@ export async function getMedications(patientId: string): Promise<Medication[]> {
   const { data, error } = await admin
     .from('patient_medications')
     .select(
-      'id, created_at, expiration, pharmacy, medications_list(name, type), medication_dosage(value), medication_dosage_personal(value)'
+      'id, medication_id, created_at, expiration, pharmacy, medications_list(name, type), medication_dosage(value), medication_dosage_personal(value)'
     )
     .eq('user_id', patientId)
     .order('created_at', { ascending: false })
@@ -473,6 +575,7 @@ export async function getMedications(patientId: string): Promise<Medication[]> {
 
     return {
       id: Number(row.id),
+      medicationId: Number(row.medication_id),
       name: med?.name ?? 'Unnamed medication',
       type: med?.type ?? null,
       // A personal dosage overrides the catalog dosage when present.
@@ -483,4 +586,80 @@ export async function getMedications(patientId: string): Promise<Medication[]> {
       startedAt: (row.created_at as string | null) ?? null,
     }
   })
+}
+
+/** One dose a medication is normally prescribed at. */
+export type DosageOption = {
+  /** `medications_list.id`, which is how these are grouped. */
+  medicationId: number
+  id: number
+  value: string
+}
+
+/**
+ * Every dosing choice the clinic keeps, from the same `medication_dosage` table
+ * the admin app's medication modal reads.
+ *
+ * These are what a provider should be picking from, because they are the doses
+ * the pharmacy is set up to fill. The coverage is uneven and that is the point of
+ * returning them rather than assuming them: Anastrozole has eight
+ * (`1.00mg - Take 1/2 tablet (0.50mg) by mouth twice weekly…`), the testosterone
+ * cream has four written in clicks per day, and `Other` — 560 active rows — has
+ * none at all, so the UI has to keep working with an empty list.
+ *
+ * All 89 rows come down at once, unfiltered, because adding a medication offers
+ * the whole catalog and the patient's own prescriptions are no guide to what a
+ * provider is about to start.
+ */
+export async function getDosageOptions(): Promise<DosageOption[]> {
+  const admin = createAdminClient()
+
+  const { data, error } = await admin
+    .from('medication_dosage')
+    .select('id, medication_id, value')
+    // Authored low dose to high, so the ids are the clinical order.
+    .order('id', { ascending: true })
+  if (error) throw new Error(`medication_dosage query failed: ${error.message}`)
+
+  return (data ?? [])
+    .map((row) => ({
+      medicationId: Number(row.medication_id),
+      id: Number(row.id),
+      value: ((row.value as string | null) ?? '').trim(),
+    }))
+    .filter((option) => option.value.length > 0)
+}
+
+/** A medication that can be started, as the picker lists it. */
+export type CatalogMedication = {
+  /** `medications_list.id` — what `DosageOption.medicationId` refers to. */
+  id: number
+  name: string
+  type: string | null
+}
+
+/**
+ * The medications a protocol can be added to, in the order a picker should show
+ * them.
+ *
+ * Restricted rows are dropped here rather than in the UI so no caller can offer
+ * them by forgetting to filter — see `RESTRICTED_MEDICATION_IDS`. `name` is
+ * trimmed because two catalog rows carry a trailing newline.
+ */
+export async function getMedicationCatalog(): Promise<CatalogMedication[]> {
+  const admin = createAdminClient()
+
+  const { data, error } = await admin
+    .from('medications_list')
+    .select('id, name, type')
+    .order('name', { ascending: true })
+  if (error) throw new Error(`medications_list query failed: ${error.message}`)
+
+  return (data ?? [])
+    .map((row) => ({
+      id: Number(row.id),
+      name: ((row.name as string | null) ?? '').trim(),
+      type: (row.type as string | null)?.trim() || null,
+    }))
+    .filter((med) => med.name.length > 0 && !RESTRICTED_MEDICATION_IDS.includes(med.id))
 }
