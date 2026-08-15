@@ -6,6 +6,7 @@ import {
   relativeAge,
   shortDate,
   shortDateTime,
+  shortStatus,
   shortTime,
   statusTone,
 } from './format.ts'
@@ -72,6 +73,38 @@ test('statusTone: a cancelled subscription is not active either', () => {
   assert.equal(statusTone('Non-Patient - Dropped'), 'neutral')
   assert.equal(statusTone(null), 'neutral')
   assert.equal(statusTone(''), 'neutral')
+})
+
+test('shortStatus leads with patient or non-patient and keeps the rest', () => {
+  assert.equal(shortStatus('Patient, Active Subscription'), 'Patient · Active Subscription')
+  assert.equal(shortStatus('Non-Patient - Pricing sent to PT'), 'Non-patient · Pricing sent to PT')
+  assert.equal(
+    shortStatus('Non-Patient - Treatment NOT Recommended'),
+    'Non-patient · Treatment NOT Recommended'
+  )
+  // Lower-case "patient" in the stored label, and a program in the tail.
+  assert.equal(shortStatus('Non-patient - Init payment declined'), 'Non-patient · Init payment declined')
+  assert.equal(shortStatus('Patient - Active Sub Weightloss'), 'Patient · Active Sub Weightloss')
+})
+
+test('shortStatus drops the parenthetical and the double space in the stored labels', () => {
+  assert.equal(
+    shortStatus('Non-Patient, Attended Initial Consultation (ordered a test)'),
+    'Non-patient · Attended Initial Consultation'
+  )
+  assert.equal(shortStatus('Patient,  Subscription Cancelled'), 'Patient · Subscription Cancelled')
+})
+
+test('shortStatus passes through a label that is neither group', () => {
+  // Staff accounts do not belong to either, and inventing "Patient · Alpha MD
+  // employee" for one would be worse than saying nothing.
+  assert.equal(shortStatus('Alpha MD employee'), 'Alpha MD employee')
+})
+
+test('shortStatus on a missing status is null, so a row can leave the pill out', () => {
+  assert.equal(shortStatus(null), null)
+  assert.equal(shortStatus(undefined), null)
+  assert.equal(shortStatus('   '), null)
 })
 
 test('initials', () => {

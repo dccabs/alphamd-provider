@@ -9,6 +9,7 @@ import {
   type AnalyteCollection,
 } from './analytes'
 import { RESTRICTED_MEDICATION_IDS } from './clinicalIds'
+import type { QueueRow } from './queueRow'
 import { parseDraft, type ReviewDraft } from './reviewDraft'
 
 /**
@@ -27,19 +28,9 @@ export function isLabReviewStatus(value: string | undefined): value is LabReview
   return !!value && (LAB_REVIEW_STATUSES as readonly string[]).includes(value)
 }
 
-export type QueueRow = {
-  id: string
-  patientId: string
-  patientName: string
-  status: string
-  summaryStatus: string | null
-  assignedTo: string | null
-  assignedToName: string | null
-  lastSourceAt: string | null
-  createdAt: string | null
-  sourceKinds: string[]
-  flags: string[]
-}
+/** Re-exported so callers of `listLabReviews` can name what it returns without
+ *  reaching for a second module. Defined in `./queueRow`. */
+export type { QueueRow }
 
 export type LabReviewDetail = {
   id: string
@@ -160,7 +151,7 @@ export async function listLabReviews(status: LabReviewStatus): Promise<QueueRow[
     admin
       .from('lab_reviews')
       .select(
-        'id, patient_id, status, summary_status, assigned_to, last_source_at, created_at'
+        'id, patient_id, status, summary_status, assigned_to, started_at, draft_updated_at, reviewed_at, last_source_at, created_at'
       )
       .eq('status', status)
   )
@@ -173,10 +164,11 @@ export async function listLabReviews(status: LabReviewStatus): Promise<QueueRow[
   const patientIds = rows.map((r) => r.patient_id as string)
   const assigneeIds = rows.map((r) => r.assigned_to as string | null).filter(Boolean) as string[]
 
-  const [names, sources, flags] = await Promise.all([
+  const [names, sources, flags, statuses] = await Promise.all([
     namesFor([...patientIds, ...assigneeIds]),
     admin.from('lab_review_sources').select('lab_review_id, source').in('lab_review_id', reviewIds),
     listFlagsFor(patientIds),
+    listPatientStatuses(patientIds),
   ])
   if (sources.error) throw new Error(`lab_review_sources query failed: ${sources.error.message}`)
 
@@ -192,9 +184,13 @@ export async function listLabReviews(status: LabReviewStatus): Promise<QueueRow[
     patientId: r.patient_id as string,
     patientName: names.get(r.patient_id as string) ?? 'Unknown patient',
     status: r.status as string,
+    patientStatus: statuses.get(r.patient_id as string) ?? null,
     summaryStatus: (r.summary_status as string | null) ?? null,
     assignedTo: (r.assigned_to as string | null) ?? null,
     assignedToName: r.assigned_to ? (names.get(r.assigned_to as string) ?? null) : null,
+    startedAt: (r.started_at as string | null) ?? null,
+    draftUpdatedAt: (r.draft_updated_at as string | null) ?? null,
+    reviewedAt: (r.reviewed_at as string | null) ?? null,
     lastSourceAt: (r.last_source_at as string | null) ?? null,
     createdAt: (r.created_at as string | null) ?? null,
     sourceKinds: [...(kindsByReview.get(r.id as string) ?? [])].sort(),
@@ -263,6 +259,65 @@ async function listFlagsFor(patientIds: string[]): Promise<Map<string, string[]>
 
 export async function getPatientFlags(patientId: string): Promise<string[]> {
   return (await listFlagsFor([patientId])).get(patientId) ?? []
+}
+
+/** `user_list.status` is text holding a `user_statuses.id`. Blank and unparseable
+ *  values are treated as "no status" rather than as status 0. */
+function statusIdOf(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null
+  const id = Number(value)
+  return Number.isInteger(id) && id > 0 ? id : null
+}
+
+/**
+ * Status labels per patient, for a whole queue page in two reads.
+ *
+ * Not a PostgREST embed because `user_list.status` is text with no foreign key
+ * to `user_statuses`, so the join has to happen here.
+ */
+async function listPatientStatuses(patientIds: string[]): Promise<Map<string, string>> {
+  const unique = [...new Set(patientIds.filter(Boolean))]
+  if (!unique.length) return new Map()
+
+  const admin = createAdminClient()
+  const { data, error } = await admin
+    .from('user_list')
+    .select('user_id, status')
+    .in('user_id', unique)
+  if (error) throw new Error(`user_list status lookup failed: ${error.message}`)
+
+  const ids = new Map<string, number>()
+  for (const row of data ?? []) {
+    const id = statusIdOf(row.status)
+    if (id !== null) ids.set(row.user_id as string, id)
+  }
+
+  const labels = await statusLabelsFor([...ids.values()])
+
+  const out = new Map<string, string>()
+  for (const [userId, id] of ids) {
+    const label = labels.get(id)
+    if (label) out.set(userId, label)
+  }
+  return out
+}
+
+/** Labels for a set of `user_statuses` ids. A failed lookup yields no labels
+ *  rather than throwing: a status pill is worth losing, a queue page is not. */
+async function statusLabelsFor(statusIds: number[]): Promise<Map<number, string>> {
+  const unique = [...new Set(statusIds)]
+  if (!unique.length) return new Map()
+
+  const admin = createAdminClient()
+  const { data, error } = await admin.from('user_statuses').select('id, status').in('id', unique)
+  if (error) return new Map()
+
+  const out = new Map<number, string>()
+  for (const row of data ?? []) {
+    const label = row.status as string | null
+    if (label) out.set(Number(row.id), label)
+  }
+  return out
 }
 
 function parseAnalytes(json: unknown): {
@@ -430,7 +485,6 @@ export type PatientHeader = {
    *  discounted labs may be offered — New York and New Jersey prohibit them. */
   state: string | null
   flags: string[]
-  protocol: string | null
 }
 
 function ageFrom(dob: string | null): number | null {
@@ -470,17 +524,18 @@ export async function getPatientHeader(patientId: string): Promise<PatientHeader
   if (error) throw new Error(`user_list lookup failed: ${error.message}`)
   if (!data) return null
 
-  const [statusLabel, flags, protocol] = await Promise.all([
-    data.status ? statusLabelFor(Number(data.status)) : Promise.resolve(null),
+  const statusId = statusIdOf(data.status)
+
+  const [statusLabel, flags] = await Promise.all([
+    statusId === null ? Promise.resolve(null) : statusLabelFor(statusId),
     getPatientFlags(patientId),
-    activeProtocolLabel(patientId),
   ])
 
   return {
     patientId,
     name: fullName(data as NameRow),
     status: statusLabel,
-    statusId: data.status === null || data.status === undefined ? null : Number(data.status),
+    statusId,
     age: ageFrom(data.date_of_birth as string | null),
     gender: (data.gender as string | null) ?? null,
     dateOfBirth: (data.date_of_birth as string | null) ?? null,
@@ -496,35 +551,11 @@ export async function getPatientHeader(patientId: string): Promise<PatientHeader
     ),
     state: (data.state as string | null) ?? null,
     flags,
-    protocol,
   }
 }
 
 async function statusLabelFor(statusId: number): Promise<string | null> {
-  const admin = createAdminClient()
-  const { data, error } = await admin
-    .from('user_statuses')
-    .select('status')
-    .eq('id', statusId)
-    .maybeSingle()
-  if (error) return null
-  return (data?.status as string | null) ?? null
-}
-
-/**
- * The design's status pill reads "Active — Weekly Injections". Only the first
- * half is stored; there is no protocol-name field anywhere. This derives the
- * second half from the patient's active medications, and returns null rather
- * than inventing a phrase when there are none.
- */
-async function activeProtocolLabel(patientId: string): Promise<string | null> {
-  const meds = await getMedications(patientId)
-  const active = meds.filter((m) => m.active)
-  if (!active.length) return null
-  return active
-    .slice(0, 2)
-    .map((m) => m.name)
-    .join(' + ')
+  return (await statusLabelsFor([statusId])).get(statusId) ?? null
 }
 
 export type Medication = {

@@ -178,6 +178,14 @@ export function ReviewModal({
   const showDose = draft.disposition === 'dose_change'
   const showInstructions = followUp && draft.followUpKinds.includes('patient_instructions')
 
+  // Continuing as designed is a statement that nothing is changing, so there is
+  // nothing to add. Medications added before the provider landed on it are still
+  // shown, because they are a decision that was made and hiding them would leave
+  // them on the record with no way to reach them — `validateCompletion` is what
+  // insists they be removed.
+  const continuing = draft.disposition === 'continue_protocol'
+  const showNewMeds = !continuing || draft.newMedications.length > 0
+
   const toggleFollowUp = (kind: FollowUpKind) =>
     update({
       followUpKinds: draft.followUpKinds.includes(kind)
@@ -322,16 +330,20 @@ export function ReviewModal({
             </div>
           )}
 
-          {/* Not behind a disposition. Raising a dose and starting something new
-              is one decision, and a provider who has picked "Dose change" still
-              has to be able to record the second half of it. */}
-          <NewMedicationPanel
-            catalog={catalog}
-            medications={medications}
-            dosageOptions={dosageOptions}
-            added={draft.newMedications}
-            onChange={(newMedications) => update({ newMedications })}
-          />
+          {/* Under every disposition but "continue protocol". Raising a dose and
+              starting something new is one decision, and a provider who has
+              picked "Dose change" still has to be able to record the second half
+              of it. */}
+          {showNewMeds && (
+            <NewMedicationPanel
+              catalog={catalog}
+              medications={medications}
+              dosageOptions={dosageOptions}
+              added={draft.newMedications}
+              canAdd={!continuing}
+              onChange={(newMedications) => update({ newMedications })}
+            />
+          )}
 
           <div className="flex flex-col gap-2">
             <Label

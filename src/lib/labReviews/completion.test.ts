@@ -28,6 +28,25 @@ test('continue protocol needs nothing else', () => {
   assert.deepEqual(validateCompletion(draft({ disposition: 'continue_protocol' })), [])
 })
 
+test('continue protocol cannot be finished with a medication added', () => {
+  // Left behind by adding one and then landing on this disposition. The note it
+  // would write would say nothing is changing and then prescribe something.
+  const problems = validateCompletion(
+    draft({
+      disposition: 'continue_protocol',
+      newMedications: [med({ name: 'Anastrozole', dose: '0.5mg twice weekly' })],
+    })
+  )
+  assert.equal(problems.length, 1)
+  assert.match(problems[0], /cannot also add a medication/)
+
+  // A blank row is not an addition, so it holds nothing up.
+  assert.deepEqual(
+    validateCompletion(draft({ disposition: 'continue_protocol', newMedications: [med()] })),
+    []
+  )
+})
+
 test('a dose change must name the medication and the dose', () => {
   const problems = validateCompletion(draft({ disposition: 'dose_change' }))
   assert.equal(problems.length, 2)

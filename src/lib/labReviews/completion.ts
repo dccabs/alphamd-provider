@@ -57,6 +57,15 @@ export function validateCompletion(draft: ReviewDraft): string[] {
     if (!draft.doseValue.trim()) problems.push('Enter the new dose.')
   }
 
+  // "No changes; continue as prescribed" and a new prescription cannot both be
+  // true. Reachable by adding one and then landing on this disposition, and worth
+  // catching, because the note it would write contradicts itself.
+  if (draft.disposition === 'continue_protocol' && namedMedications(draft).length > 0) {
+    problems.push(
+      'Continuing the protocol as designed cannot also add a medication. Remove it, or choose another disposition.'
+    )
+  }
+
   if (draft.disposition === 'follow_up_needed') {
     if (draft.followUpKinds.length === 0) {
       problems.push('Say what the follow-up needs.')

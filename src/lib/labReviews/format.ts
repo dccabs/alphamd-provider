@@ -90,6 +90,37 @@ export function statusTone(status: string | null | undefined): 'active' | 'neutr
   return /\bactive\b/i.test(status) ? 'active' : 'neutral'
 }
 
+/**
+ * A `user_statuses` label shortened for a queue row.
+ *
+ * The detail header has room for the stored label; a row beside a patient name
+ * does not — "Non-Patient, Attended Initial Consultation (ordered a test)" is
+ * twice the length of the name it sits next to. This leads with the distinction
+ * that actually decides what a provider can do with the review (an existing
+ * patient, or a prospect whose dispositions differ), keeps the rest, and drops
+ * the parenthetical. Callers should still put the stored label in a `title`.
+ *
+ * A label that is neither, such as "Alpha MD employee", is passed through rather
+ * than forced into one of the two groups.
+ */
+export function shortStatus(status: string | null | undefined): string | null {
+  if (!status?.trim()) return null
+
+  const clean = status.replace(/\s+/g, ' ').trim().replace(/\s*\([^)]*\)/g, '')
+  const group = /^non-?patient/i.test(clean)
+    ? 'Non-patient'
+    : /^patient/i.test(clean)
+      ? 'Patient'
+      : null
+  if (!group) return clean
+
+  const tail = clean
+    .replace(/^non-?patient\s*[-,]?\s*/i, '')
+    .replace(/^patient\s*[-,]?\s*/i, '')
+    .trim()
+  return tail ? `${group} · ${tail}` : group
+}
+
 /** Initials for an avatar, e.g. "Jonathan Meyer" → "JM". */
 export function initials(name: string | null | undefined): string {
   if (!name?.trim()) return '?'

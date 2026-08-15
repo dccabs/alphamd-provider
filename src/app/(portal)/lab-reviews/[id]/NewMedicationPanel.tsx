@@ -49,6 +49,7 @@ export function NewMedicationPanel({
   medications,
   dosageOptions,
   added,
+  canAdd,
   onChange,
 }: {
   /** Everything that can be started. Restricted medications are already gone. */
@@ -57,6 +58,9 @@ export function NewMedicationPanel({
   medications: Medication[]
   dosageOptions: DosageOption[]
   added: DraftMedication[]
+  /** False under a disposition that cannot add one — the rows already added stay
+   *  editable and removable, but no more can be started. */
+  canAdd: boolean
   onChange: (added: DraftMedication[]) => void
 }) {
   /** Which row the dialog is editing: an index, `'new'`, or closed. */
@@ -77,11 +81,20 @@ export function NewMedicationPanel({
         <span className="text-xs font-bold tracking-wider text-muted-foreground">
           NEW MEDICATIONS
         </span>
-        <Button variant="outline" size="xs" onClick={() => setEditing('new')}>
-          <Plus />
-          Add medication to protocol
-        </Button>
+        {canAdd && (
+          <Button variant="outline" size="xs" onClick={() => setEditing('new')}>
+            <Plus />
+            Add medication to protocol
+          </Button>
+        )}
       </div>
+
+      {!canAdd && (
+        <p className="text-xs text-amber-700">
+          Continuing the protocol as designed cannot also start a medication. Remove it, or choose
+          another disposition.
+        </p>
+      )}
 
       {added.length === 0 ? (
         <p className="rounded-lg border border-dashed px-3 py-2.5 text-xs text-muted-foreground">

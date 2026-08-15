@@ -1,6 +1,5 @@
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
-import { ChevronRight } from 'lucide-react'
 
 import { checkProviderAccess } from '@/lib/authz'
 import {
@@ -9,8 +8,8 @@ import {
   type LabReviewStatus,
 } from '@/lib/labReviews/queries'
 import { AccessDenied } from '@/components/access-denied'
-import { Badge } from '@/components/ui/badge'
-import { relativeAge, shortDate } from '@/lib/labReviews/format'
+import { QueueList } from '@/components/queue-list'
+import { progressOf } from '@/lib/labReviews/queueRow'
 
 export const metadata = { title: 'Lab reviews | Alpha MD Provider' }
 
@@ -19,11 +18,6 @@ const STATUS_TABS: { id: LabReviewStatus; label: string }[] = [
   { id: 'needs_attention', label: 'Needs attention' },
   { id: 'finished', label: 'Finished' },
 ]
-
-const SOURCE_LABELS: Record<string, string> = {
-  incoming_fax: 'Fax',
-  patient_upload: 'Upload',
-}
 
 const EMPTY_COPY: Record<LabReviewStatus, string> = {
   active: 'Nothing waiting. New labs arrive here from incoming faxes and patient uploads.',
@@ -46,6 +40,7 @@ export default async function LabReviewsPage({
   const { status: statusParam } = await searchParams
   const status: LabReviewStatus = isLabReviewStatus(statusParam) ? statusParam : 'active'
   const reviews = await listLabReviews(status)
+  const inProgressCount = reviews.filter((r) => progressOf(r) === 'in_progress').length
 
   return (
     <main className="min-h-screen bg-muted">
@@ -82,53 +77,19 @@ export default async function LabReviewsPage({
             {EMPTY_COPY[status]}
           </p>
         ) : (
-          <ul className="mt-4 divide-y rounded-xl border bg-card">
-            {reviews.map((review, index) => (
-              <li key={review.id}>
-                <Link
-                  href={`/lab-reviews/${review.id}`}
-                  className="flex items-center gap-4 px-4 py-3 hover:bg-muted/60"
-                >
-                  <span className="w-6 shrink-0 text-xs tabular-nums text-muted-foreground">
-                    {index + 1}
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="flex flex-wrap items-center gap-2">
-                      <span className="text-sm font-medium">{review.patientName}</span>
-                      {review.flags.map((flag) => (
-                        <Badge key={flag} variant="destructive">
-                          {flag}
-                        </Badge>
-                      ))}
-                      {review.summaryStatus && review.summaryStatus !== 'ready' && (
-                        <Badge variant="secondary">Summary {review.summaryStatus}</Badge>
-                      )}
-                    </span>
-                    <span className="mt-0.5 block text-xs text-muted-foreground">
-                      {[
-                        relativeAge(review.lastSourceAt ?? review.createdAt),
-                        shortDate(review.lastSourceAt ?? review.createdAt),
-                        review.sourceKinds
-                          .map((kind) => SOURCE_LABELS[kind] ?? kind)
-                          .join(' + '),
-                        review.assignedToName
-                          ? `Assigned to ${review.assignedToName}`
-                          : 'Unassigned',
-                      ]
-                        .filter(Boolean)
-                        .join(' · ')}
-                    </span>
-                  </span>
-                  <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
-                </Link>
-              </li>
-            ))}
-          </ul>
+          <div className="mt-4">
+            <QueueList reviews={reviews} numbered />
+          </div>
         )}
 
         <p className="mt-4 text-xs text-muted-foreground">
-          {reviews.length} {reviews.length === 1 ? 'review' : 'reviews'} ·{' '}
-          {STATUS_TABS.find((t) => t.id === status)?.label.toLowerCase()}
+          {[
+            `${reviews.length} ${reviews.length === 1 ? 'review' : 'reviews'}`,
+            STATUS_TABS.find((t) => t.id === status)?.label.toLowerCase(),
+            inProgressCount ? `${inProgressCount} in progress` : null,
+          ]
+            .filter(Boolean)
+            .join(' · ')}
         </p>
       </div>
     </main>

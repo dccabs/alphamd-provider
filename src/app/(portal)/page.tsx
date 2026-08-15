@@ -3,9 +3,9 @@ import { redirect } from 'next/navigation'
 import { ChevronRight } from 'lucide-react'
 
 import { checkProviderAccess } from '@/lib/authz'
-import { getQueueSummary, type QueueRow } from '@/lib/labReviews/queries'
-import { relativeAge, shortDate } from '@/lib/labReviews/format'
-import { Badge } from '@/components/ui/badge'
+import { getQueueSummary } from '@/lib/labReviews/queries'
+import type { QueueRow } from '@/lib/labReviews/queueRow'
+import { QueueList } from '@/components/queue-list'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 
 export const metadata = { title: 'Dashboard | Alpha MD Provider' }
@@ -170,42 +170,9 @@ function Section({
           {empty}
         </p>
       ) : (
-        <ul className="mt-3 divide-y rounded-xl border bg-card">
-          {reviews.map((review) => (
-            <li key={review.id}>
-              <Link
-                href={`/lab-reviews/${review.id}`}
-                className="flex items-center gap-4 px-4 py-3 hover:bg-muted/60"
-              >
-                <span className="min-w-0 flex-1">
-                  <span className="flex flex-wrap items-center gap-2">
-                    <span className="text-sm font-medium">{review.patientName}</span>
-                    {review.status === 'needs_attention' && (
-                      <Badge variant="destructive">Needs attention</Badge>
-                    )}
-                    {review.flags.map((flag) => (
-                      <Badge key={flag} variant="destructive">
-                        {flag}
-                      </Badge>
-                    ))}
-                    {review.summaryStatus && review.summaryStatus !== 'ready' && (
-                      <Badge variant="secondary">Summary {review.summaryStatus}</Badge>
-                    )}
-                  </span>
-                  <span className="mt-0.5 block text-xs text-muted-foreground">
-                    {[
-                      relativeAge(review.lastSourceAt ?? review.createdAt),
-                      shortDate(review.lastSourceAt ?? review.createdAt),
-                    ]
-                      .filter(Boolean)
-                      .join(' · ')}
-                  </span>
-                </span>
-                <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
-              </Link>
-            </li>
-          ))}
-        </ul>
+        <div className="mt-3">
+          <QueueList reviews={reviews} />
+        </div>
       )}
 
       {footer && <p className="mt-2 text-xs text-muted-foreground">{footer}</p>}

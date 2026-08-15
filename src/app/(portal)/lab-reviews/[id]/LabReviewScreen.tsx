@@ -14,13 +14,14 @@ import {
   UserPlus,
 } from 'lucide-react'
 
+import { PatientStatusPill } from '@/components/patient-status'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import type { LabOrder } from '@/lib/labOrders/order'
 import type { LabProviderOption, ScheduledLabOrder } from '@/lib/labOrders/queries'
 import type { Analyte } from '@/lib/labReviews/analytes'
 import type { Consultation } from '@/lib/labReviews/consultations'
-import { shortDate, shortDateTime, statusTone } from '@/lib/labReviews/format'
+import { shortDate, shortDateTime } from '@/lib/labReviews/format'
 import { MORE_ACTIONS } from '@/lib/labReviews/fixtures'
 import type { Escalation } from '@/lib/labReviews/needsAttention'
 import type { Note } from '@/lib/labReviews/notes'
@@ -69,7 +70,6 @@ export type PatientHeader = {
   address: string | null
   state: string | null
   flags: string[]
-  protocol: string | null
 }
 
 export function LabReviewScreen({
@@ -328,20 +328,7 @@ export function LabReviewScreen({
             <div className="flex min-w-0 flex-col gap-2">
               <div className="flex flex-wrap items-center gap-3">
                 <h1 className="text-xl font-semibold tracking-tight">{header.name}</h1>
-                {header.status &&
-                  (statusTone(header.status) === 'active' ? (
-                    <span className="inline-flex items-center gap-1.5 rounded-full border border-green-200 bg-green-50 px-2.5 py-1 text-xs font-semibold text-green-700">
-                      <span className="size-1.5 rounded-full bg-green-500" />
-                      {header.status}
-                      {header.protocol ? ` — ${header.protocol}` : ''}
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1.5 rounded-full border bg-muted px-2.5 py-1 text-xs font-semibold text-muted-foreground">
-                      <span className="size-1.5 rounded-full bg-muted-foreground/60" />
-                      {header.status}
-                      {header.protocol ? ` — ${header.protocol}` : ''}
-                    </span>
-                  ))}
+                <PatientStatusPill status={header.status} />
               </div>
               <p className="text-[13px] leading-relaxed text-muted-foreground">
                 {demographics || 'No demographics on file'}
