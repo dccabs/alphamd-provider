@@ -65,13 +65,37 @@ export const FOLLOW_UP_LABELS: Record<FollowUpKind, string> = {
 }
 
 /**
+ * A change to one of the patient's existing prescriptions.
+ *
+ * More than one can be recorded in a review: deciding to lower testosterone and
+ * to halve anastrozole is one decision made at one moment, and a form that only
+ * held the first would push the second into prose where nothing downstream can
+ * act on it.
+ *
+ * `from` is the dose being replaced, which is the only part that makes a change
+ * reviewable afterwards, and `value`/`sig` split the same way `DraftMedication`
+ * does: the level the chart leads with, and the instruction it works out to.
+ */
+export type DoseChange = {
+  /** The `patient_medications` row being changed. Null only for a draft saved
+   *  before the picker existed, which carries a typed name and no row. */
+  medicationId: number | null
+  medication: string
+  /** Empty when there was nothing on record to replace. */
+  from: string
+  value: string
+  /** Empty for a dose typed as free text, which is its own sig already. */
+  sig: string
+}
+
+/**
  * A medication being added to the protocol.
  *
  * `dose` is the level as a provider would say it — `160mg/week`, or the catalog
  * instruction — and `sig` is what that level works out to, empty when the dose is
- * already written as an instruction. The same split as `doseValue`/`doseSig`, for
- * the same reason: the level is what the chart leads with and the sig is what the
- * pharmacy fills.
+ * already written as an instruction. The same split as `DoseChange`, for the same
+ * reason: the level is what the chart leads with and the sig is what the pharmacy
+ * fills.
  */
 export type DraftMedication = {
   /** `medications_list.id`. Null only for a draft saved before the picker
@@ -85,19 +109,8 @@ export type DraftMedication = {
 export type ReviewDraft = {
   disposition: Disposition | null
   followUpKinds: FollowUpKind[]
-  /** The `patient_medications` row being changed, when the provider picked one
-   *  from the patient's list rather than typing a name. Kept so the dose change
-   *  is traceable to a prescription, and so reopening the flyout can reselect it. */
-  doseMedicationId: number | null
-  doseMedication: string
-  /** The dose being replaced — `140mg/week`, or the sig as written when it could
-   *  not be read in milligrams. Empty when nothing was on record to replace. */
-  doseFrom: string
-  /** The new dose level, which is what the queue and the chart lead with. */
-  doseValue: string
-  /** The instruction the new level works out to, when it could be generated.
-   *  Empty for a dose typed as free text, which is its own sig already. */
-  doseSig: string
+  /** In the order the provider confirmed them, at most one per prescription. */
+  doseChanges: DoseChange[]
   instructions: string
   newMedications: DraftMedication[]
   concerns: string
@@ -110,11 +123,7 @@ export type ReviewDraft = {
 export const EMPTY_DRAFT: ReviewDraft = {
   disposition: null,
   followUpKinds: [],
-  doseMedicationId: null,
-  doseMedication: '',
-  doseFrom: '',
-  doseValue: '',
-  doseSig: '',
+  doseChanges: [],
   instructions: '',
   newMedications: [],
   concerns: '',
@@ -130,6 +139,45 @@ function str(value: unknown): string {
  *  here would go on to be sent as a filter value. */
 function rowId(value: unknown): number | null {
   return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : null
+}
+
+function rows(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value)
+    ? value.filter((row): row is Record<string, unknown> => !!row && typeof row === 'object')
+    : []
+}
+
+/**
+ * Dose changes, from either shape the column has held.
+ *
+ * A draft saved when only one change could be recorded carries five loose keys
+ * and no array; it reads back as a list of one, which is exactly what it was.
+ * Dropping it instead would lose a dose a provider had already worked out.
+ */
+function doseChangesFrom(raw: Record<string, unknown>): DoseChange[] {
+  if (Array.isArray(raw.doseChanges)) {
+    return rows(raw.doseChanges).map((change) => ({
+      medicationId: rowId(change.medicationId),
+      medication: str(change.medication),
+      from: str(change.from),
+      value: str(change.value),
+      sig: str(change.sig),
+    }))
+  }
+
+  const medication = str(raw.doseMedication)
+  const value = str(raw.doseValue)
+  if (!medication.trim() && !value.trim()) return []
+
+  return [
+    {
+      medicationId: rowId(raw.doseMedicationId),
+      medication,
+      from: str(raw.doseFrom),
+      value,
+      sig: str(raw.doseSig),
+    },
+  ]
 }
 
 /** Tolerant read of the `draft` column. Unknown keys are dropped and bad types
@@ -149,30 +197,19 @@ export function parseDraft(json: unknown): ReviewDraft {
   // A draft written before the catalog picker existed has a typed name and a
   // typed dose, which reads back as a medication with no provenance and no sig —
   // exactly what it was.
-  const newMedications = Array.isArray(raw.newMedications)
-    ? raw.newMedications
-        .filter((m): m is Record<string, unknown> => !!m && typeof m === 'object')
-        .map((m) => ({
-          medicationId: rowId(m.medicationId),
-          name: str(m.name),
-          dose: str(m.dose),
-          sig: str(m.sig),
-        }))
-    : []
+  const newMedications = rows(raw.newMedications).map((m) => ({
+    medicationId: rowId(m.medicationId),
+    name: str(m.name),
+    dose: str(m.dose),
+    sig: str(m.sig),
+  }))
 
   return {
     disposition: isDisposition(raw.disposition) ? raw.disposition : null,
     // Deduplicated: the checkbox group can only produce one of each, but a
     // hand-edited or older payload can carry repeats.
     followUpKinds: [...new Set(followUpKinds)],
-    // A draft written before the medication list existed carries the two text
-    // fields and nothing else, which reads back as a dose change with no
-    // provenance — exactly what it was.
-    doseMedicationId: rowId(raw.doseMedicationId),
-    doseMedication: str(raw.doseMedication),
-    doseFrom: str(raw.doseFrom),
-    doseValue: str(raw.doseValue),
-    doseSig: str(raw.doseSig),
+    doseChanges: doseChangesFrom(raw),
     instructions: str(raw.instructions),
     newMedications,
     concerns: str(raw.concerns),
@@ -188,8 +225,7 @@ export function isDraftEmpty(draft: ReviewDraft): boolean {
     draft.disposition === null &&
     draft.followUpKinds.length === 0 &&
     draft.newMedications.every((m) => !m.name.trim() && !m.dose.trim() && !m.sig.trim()) &&
-    !draft.doseMedication.trim() &&
-    !draft.doseValue.trim() &&
+    draft.doseChanges.every((c) => !c.medication.trim() && !c.value.trim()) &&
     !draft.instructions.trim() &&
     !draft.concerns.trim() &&
     !draft.csInstructions.trim() &&

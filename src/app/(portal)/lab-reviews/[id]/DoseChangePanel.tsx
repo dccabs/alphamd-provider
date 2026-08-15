@@ -18,6 +18,7 @@ import {
   type DoseSelection,
 } from '@/lib/labReviews/doseSelection'
 import { readDose, weeklyMgLabel, type CurrentDose } from '@/lib/labReviews/dosing'
+import type { DoseChange } from '@/lib/labReviews/reviewDraft'
 import { DoseFields } from './DoseFields'
 import type { DosageOption, Medication } from './types'
 
@@ -43,81 +44,110 @@ import type { DosageOption, Medication } from './types'
  * list the modal's dropdown shows — with a personal dose to type when none of
  * them is right.
  *
+ * More than one prescription can be adjusted in a review. Lowering testosterone
+ * and halving anastrozole off the same panel is one decision made at one moment,
+ * so a confirmed change joins a list and the medications still to consider stay
+ * on offer underneath it. Each prescription holds at most one change — a second
+ * pass at the same medication edits the first rather than stacking on it, because
+ * two changes to one prescription is not a decision anybody downstream could act
+ * on.
+ *
  * Nothing here writes to `patient_medications`: the review documents the
  * decision, and the prescription itself is still edited on the medications tab in
  * the admin app.
  */
 
-export type DoseChange = {
-  /** The `patient_medications` row being changed. Nullable only because a draft
-   *  saved before this panel existed carries a typed name and no row. */
-  medicationId: number | null
-  medication: string
-  from: string
-  value: string
-  sig: string
-}
-
 export function DoseChangePanel({
   medications,
   dosageOptions,
-  change,
+  changes,
+  canChange,
   onChange,
 }: {
   medications: Medication[]
   dosageOptions: DosageOption[]
-  /** null until a change has been confirmed. */
-  change: DoseChange | null
-  onChange: (change: DoseChange | null) => void
+  /** In the order they were confirmed. */
+  changes: DoseChange[]
+  /** False under a disposition that does not record a dose change — what has
+   *  already been confirmed stays visible and removable, but nothing more can be
+   *  started. Without this the completion guard would be unfixable from here. */
+  canChange: boolean
+  onChange: (changes: DoseChange[]) => void
 }) {
-  /** Which prescription is being changed. Absent means the dialog is closed. */
+  /** Which prescription the dialog is on. Absent means it is closed. */
   const [editing, setEditing] = useState<Medication | null>(null)
 
   // Expired rows are left out: a dose change is a change to what the patient is
   // taking now, and restarting something lapsed is a new prescription.
   const active = medications.filter((med) => med.active)
 
-  // Reopening looks through every medication rather than the active ones, so a
-  // prescription that lapses between confirming and finishing can still be
-  // edited. A draft saved before this panel existed has a typed name and no row
-  // to find, and can only be cleared and redone — hence the null.
-  const editable = change ? (medications.find((m) => m.id === change.medicationId) ?? null) : null
+  const changed = new Set(changes.map((change) => change.medicationId))
+  const available = active.filter((med) => !changed.has(med.id))
+
+  /** Keyed on the prescription rather than on a row index, so reopening a
+   *  medication replaces its change instead of adding a second one. */
+  const confirm = (next: DoseChange) => {
+    const at = changes.findIndex((change) => change.medicationId === next.medicationId)
+    onChange(at === -1 ? [...changes, next] : changes.map((c, i) => (i === at ? next : c)))
+    setEditing(null)
+  }
 
   return (
     <div className="flex flex-col gap-2">
-      <span className="text-xs font-bold tracking-wider text-muted-foreground">DOSE CHANGE</span>
+      <span className="text-xs font-bold tracking-wider text-muted-foreground">DOSE CHANGES</span>
 
-      {change ? (
-        <ConfirmedChange
-          change={change}
-          onEdit={editable ? () => setEditing(editable) : null}
-          onClear={() => onChange(null)}
-        />
-      ) : (
+      {changes.length > 0 && (
         <div className="flex flex-col gap-1.5">
-          {active.length === 0 ? (
-            <p className="rounded-lg border border-dashed px-3 py-2.5 text-xs text-muted-foreground">
-              No active medications on record. Starting one is a follow-up rather than a dose
-              change.
-            </p>
-          ) : (
-            active.map((med) => (
-              <MedicationChoice key={med.id} med={med} onSelect={() => setEditing(med)} />
-            ))
-          )}
+          {changes.map((change, index) => (
+            <ConfirmedChange
+              // Index as key is safe only because rows are never reordered —
+              // confirming appends and removing splices.
+              key={index}
+              change={change}
+              // Looked up among every medication rather than the active ones, so
+              // a prescription that lapses between confirming and finishing can
+              // still be edited. A draft written before this panel existed has a
+              // typed name and no row to find, and can only be removed and
+              // redone — hence the null.
+              med={medications.find((m) => m.id === change.medicationId) ?? null}
+              onEdit={setEditing}
+              onRemove={() => onChange(changes.filter((_, i) => i !== index))}
+            />
+          ))}
         </div>
       )}
+
+      {!canChange && changes.length > 0 && (
+        <p className="text-xs text-amber-700">
+          Only the dose change disposition records these. Remove them, or choose Dose change.
+        </p>
+      )}
+
+      {canChange &&
+        (available.length === 0 ? (
+          <p className="rounded-lg border border-dashed px-3 py-2.5 text-xs text-muted-foreground">
+            {active.length === 0
+              ? 'No active medications on record. Starting one is a follow-up rather than a dose change.'
+              : 'Every active medication has a change recorded.'}
+          </p>
+        ) : (
+          <div className="flex flex-col gap-1.5">
+            {changes.length > 0 && (
+              <span className="text-xs text-muted-foreground">Change another medication</span>
+            )}
+            {available.map((med) => (
+              <MedicationChoice key={med.id} med={med} onSelect={() => setEditing(med)} />
+            ))}
+          </div>
+        ))}
 
       {editing && (
         <DoseChangeDialog
           med={editing}
           options={dosageOptions.filter((o) => o.medicationId === editing.medicationId)}
-          initial={change}
+          initial={changes.find((change) => change.medicationId === editing.id) ?? null}
           onCancel={() => setEditing(null)}
-          onConfirm={(next) => {
-            onChange(next)
-            setEditing(null)
-          }}
+          onConfirm={confirm}
         />
       )}
     </div>
@@ -148,13 +178,16 @@ function MedicationChoice({ med, onSelect }: { med: Medication; onSelect: () => 
 
 function ConfirmedChange({
   change,
+  med,
   onEdit,
-  onClear,
+  onRemove,
 }: {
   change: DoseChange
-  /** null when the prescription this change refers to is no longer on the list. */
-  onEdit: (() => void) | null
-  onClear: () => void
+  /** null when the prescription this change refers to is not on the list, which
+   *  leaves it removable but not editable. */
+  med: Medication | null
+  onEdit: (med: Medication) => void
+  onRemove: () => void
 }) {
   return (
     <div className="flex items-start justify-between gap-2 rounded-lg border border-green-600 bg-green-50 px-3 py-2.5">
@@ -166,13 +199,13 @@ function ConfirmedChange({
         {change.sig && <div className="mt-0.5 text-xs text-muted-foreground">{change.sig}</div>}
       </div>
       <div className="flex shrink-0 items-center gap-1">
-        {onEdit && (
-          <Button variant="outline" size="xs" onClick={onEdit}>
+        {med && (
+          <Button variant="outline" size="xs" onClick={() => onEdit(med)}>
             Edit
           </Button>
         )}
-        <Button variant="ghost" size="xs" onClick={onClear}>
-          Clear
+        <Button variant="ghost" size="xs" onClick={onRemove}>
+          Remove
         </Button>
       </div>
     </div>

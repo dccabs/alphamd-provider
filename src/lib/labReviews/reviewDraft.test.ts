@@ -27,11 +27,15 @@ test('a full draft round-trips', () => {
   const stored = {
     disposition: 'follow_up_needed',
     followUpKinds: ['more_labs', 'patient_instructions'],
-    doseMedicationId: 4821,
-    doseMedication: 'Testosterone Cypionate',
-    doseFrom: '140mg/week',
-    doseValue: '180mg/week',
-    doseSig: 'Inject .45mL subcutaneously every 3.5 days.',
+    doseChanges: [
+      {
+        medicationId: 4821,
+        medication: 'Testosterone Cypionate',
+        from: '140mg/week',
+        value: '180mg/week',
+        sig: 'Inject .45mL subcutaneously every 3.5 days.',
+      },
+    ],
     instructions: 'Recheck in 8 weeks',
     newMedications: [
       {
@@ -108,19 +112,73 @@ test('a draft written before the medication list still reads', () => {
     doseValue: '180 mg/wk',
   })
 
-  assert.equal(draft.doseMedication, 'Test Cyp')
-  assert.equal(draft.doseValue, '180 mg/wk')
-  assert.equal(draft.doseMedicationId, null)
-  assert.equal(draft.doseFrom, '')
-  assert.equal(draft.doseSig, '')
+  assert.deepEqual(draft.doseChanges, [
+    { medicationId: null, medication: 'Test Cyp', from: '', value: '180 mg/wk', sig: '' },
+  ])
 })
 
-test('a medication id is only kept if it could be a row id', () => {
-  assert.equal(parseDraft({ doseMedicationId: 4821 }).doseMedicationId, 4821)
-  assert.equal(parseDraft({ doseMedicationId: '4821' }).doseMedicationId, null)
-  assert.equal(parseDraft({ doseMedicationId: 0 }).doseMedicationId, null)
-  assert.equal(parseDraft({ doseMedicationId: -1 }).doseMedicationId, null)
-  assert.equal(parseDraft({ doseMedicationId: 4.5 }).doseMedicationId, null)
+test('a draft that held one dose change reads back as a list of one', () => {
+  // A draft autosaved before more than one change could be recorded. This is
+  // live in production, sig and all, so losing it would cost real work.
+  const draft = parseDraft({
+    disposition: 'dose_change',
+    doseMedicationId: 6869,
+    doseMedication: 'Testosterone cypionate',
+    doseFrom: '160mg/week',
+    doseValue: '140mg/week',
+    doseSig: 'Inject .233mL subcutaneously on MWF.',
+  })
+
+  assert.deepEqual(draft.doseChanges, [
+    {
+      medicationId: 6869,
+      medication: 'Testosterone cypionate',
+      from: '160mg/week',
+      value: '140mg/week',
+      sig: 'Inject .233mL subcutaneously on MWF.',
+    },
+  ])
+})
+
+test('the old dose keys are ignored once the array is there', () => {
+  // Both shapes at once can only come from a hand-edited payload. The array is
+  // what this build writes, so it wins rather than being merged with.
+  const draft = parseDraft({
+    doseChanges: [{ medicationId: 1, medication: 'Anastrozole', value: '0.25mg twice weekly' }],
+    doseMedication: 'Testosterone cypionate',
+    doseValue: '140mg/week',
+  })
+
+  assert.deepEqual(draft.doseChanges, [
+    { medicationId: 1, medication: 'Anastrozole', from: '', value: '0.25mg twice weekly', sig: '' },
+  ])
+})
+
+test('an empty pair of old dose keys does not invent a change', () => {
+  assert.deepEqual(parseDraft({ doseMedication: '', doseValue: '' }).doseChanges, [])
+  assert.deepEqual(parseDraft({ doseMedication: '  ', doseValue: '\t' }).doseChanges, [])
+  assert.deepEqual(parseDraft({ disposition: 'dose_change' }).doseChanges, [])
+})
+
+test('malformed dose change rows are coerced, not dropped silently mid-array', () => {
+  assert.deepEqual(
+    parseDraft({ doseChanges: [{ medication: 'A' }, null, { value: 5 }, 'nope'] }).doseChanges,
+    [
+      { medicationId: null, medication: 'A', from: '', value: '', sig: '' },
+      { medicationId: null, medication: '', from: '', value: '', sig: '' },
+    ]
+  )
+})
+
+test('a prescription id on a dose change is only kept if it could be a row id', () => {
+  const ids = (medicationId: unknown) =>
+    parseDraft({ doseChanges: [{ medication: 'A', medicationId }] }).doseChanges[0].medicationId
+
+  assert.equal(ids(4821), 4821)
+  assert.equal(ids('4821'), null)
+  assert.equal(ids(0), null)
+  assert.equal(ids(-1), null)
+  assert.equal(ids(4.5), null)
 })
 
 test('non-string text fields fall back to empty', () => {
@@ -149,6 +207,24 @@ test('a blank medication row added and not filled in is not worth saving', () =>
       ...EMPTY_DRAFT,
       newMedications: [{ medicationId: null, name: '', dose: '', sig: '' }],
     })
+  )
+})
+
+test('a dose change is worth saving', () => {
+  assert.equal(
+    isDraftEmpty({
+      ...EMPTY_DRAFT,
+      doseChanges: [
+        {
+          medicationId: 4821,
+          medication: 'Testosterone cypionate',
+          from: '160mg/week',
+          value: '140mg/week',
+          sig: '',
+        },
+      ],
+    }),
+    false
   )
 })
 

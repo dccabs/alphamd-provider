@@ -24,16 +24,21 @@ export function describeDecision(draft: ReviewDraft): string {
     lines.push(`Disposition chosen: ${DISPOSITION_LABELS[draft.disposition]}.`)
   }
 
-  if (draft.doseMedication.trim()) {
-    const from = draft.doseFrom.trim()
-    const to = draft.doseValue.trim()
+  // One sentence per prescription. A model handed "testosterone and anastrozole
+  // were changed" writes one plan for two doses.
+  for (const change of draft.doseChanges) {
+    const medication = change.medication.trim()
+    if (!medication) continue
+
+    const from = change.from.trim()
+    const to = change.value.trim()
     // The sig comes with its own full stop, which would read as a stutter inside
     // the parenthesis this sentence ends with.
-    const sig = draft.doseSig.trim().replace(/\.$/, '')
+    const sig = change.sig.trim().replace(/\.$/, '')
 
     lines.push(
       [
-        `Dose change: ${draft.doseMedication.trim()}`,
+        `Dose change: ${medication}`,
         from ? ` from ${from}` : '',
         to ? ` to ${to}` : '',
         sig ? ` (${sig})` : '',

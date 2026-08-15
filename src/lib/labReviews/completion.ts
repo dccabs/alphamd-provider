@@ -52,9 +52,18 @@ export function validateCompletion(draft: ReviewDraft): string[] {
     return problems
   }
 
-  if (draft.disposition === 'dose_change') {
-    if (!draft.doseMedication.trim()) problems.push('Choose the medication being changed.')
-    if (!draft.doseValue.trim()) problems.push('Enter the new dose.')
+  if (draft.disposition === 'dose_change' && recordedChanges(draft).length === 0) {
+    problems.push('Record the dose change: choose a medication and set its new dose.')
+  }
+
+  // Reachable by recording one and then landing on another disposition. The
+  // changes are left in the draft rather than dropped — a dose a provider worked
+  // out is not something to discard quietly — so finishing has to stop until they
+  // are either removed or claimed by the right disposition.
+  if (draft.disposition !== 'dose_change' && recordedChanges(draft).length > 0) {
+    problems.push(
+      'A dose change is only recorded under the Dose change disposition. Remove it, or choose Dose change.'
+    )
   }
 
   // "No changes; continue as prescribed" and a new prescription cannot both be
@@ -86,6 +95,12 @@ export function validateCompletion(draft: ReviewDraft): string[] {
 
 function namedMedications(draft: ReviewDraft) {
   return draft.newMedications.filter((m) => m.name.trim())
+}
+
+/** The changes that say something. A row with a medication and no dose, or the
+ *  reverse, describes nothing anyone could act on. */
+function recordedChanges(draft: ReviewDraft) {
+  return draft.doseChanges.filter((change) => change.medication.trim() && change.value.trim())
 }
 
 /**
@@ -179,15 +194,10 @@ function sentence(text: string): string {
   return /[.!?]$/.test(text) ? text : `${text}.`
 }
 
-function doseChangeFor(draft: ReviewDraft) {
-  return draft.disposition === 'dose_change'
-    ? doseChangeLines({
-        medication: draft.doseMedication,
-        from: draft.doseFrom,
-        value: draft.doseValue,
-        sig: draft.doseSig,
-      })
-    : null
+/** Nothing outside the dose-change disposition, which `validateCompletion` has
+ *  already refused, so a stranded change cannot reach the chart. */
+function doseChangesFor(draft: ReviewDraft) {
+  return draft.disposition === 'dose_change' ? recordedChanges(draft) : []
 }
 
 export function planCompletion(draft: ReviewDraft, providerName: string): CompletionPlan {
@@ -231,12 +241,14 @@ export function planCompletion(draft: ReviewDraft, providerName: string): Comple
   }
 
   const lines: string[] = [`Lab review completed by ${providerName}. Disposition: ${label}.`]
-  const dose = doseChangeFor(draft)
   // One line per medication rather than one line listing them, because each
   // carries a dose and a sig that somebody has to read and act on separately.
+  const changes = doseChangesFor(draft)
+    .map(doseChangeLines)
+    .filter((change) => change !== null)
   const added = meds.map(newMedicationLines).filter((added) => added !== null)
 
-  if (dose) lines.push(dose.chart)
+  for (const change of changes) lines.push(change.chart)
 
   if (disposition === 'follow_up_needed' && draft.followUpKinds.length) {
     lines.push(
@@ -258,7 +270,7 @@ export function planCompletion(draft: ReviewDraft, providerName: string): Comple
   // rather than appended into the provider's own text, so changing the dose twice
   // cannot leave a stale instruction behind.
   const csLines = [
-    dose?.cs,
+    ...changes.map((change) => change.cs),
     ...added.map((medication) => medication.cs),
     draft.csInstructions.trim() || null,
   ].filter(Boolean)
@@ -272,11 +284,13 @@ export function planCompletion(draft: ReviewDraft, providerName: string): Comple
     detail: {
       disposition,
       followUpKinds: draft.followUpKinds,
-      doseMedicationId: draft.doseMedicationId,
-      doseMedication: draft.doseMedication.trim() || null,
-      doseFrom: draft.doseFrom.trim() || null,
-      doseValue: draft.doseValue.trim() || null,
-      doseSig: draft.doseSig.trim() || null,
+      doseChanges: doseChangesFor(draft).map((change) => ({
+        medicationId: change.medicationId,
+        medication: change.medication.trim(),
+        from: change.from.trim() || null,
+        value: change.value.trim(),
+        sig: change.sig.trim() || null,
+      })),
       newMedications: meds.map((m) => ({
         medicationId: m.medicationId,
         name: m.name.trim(),
@@ -299,8 +313,14 @@ export function planCompletion(draft: ReviewDraft, providerName: string): Comple
  * goes after the label — a dose is more use at a glance than the label alone.
  */
 function resolutionLine(draft: ReviewDraft, label: string): string {
-  if (draft.disposition === 'dose_change' && draft.doseMedication.trim()) {
-    return `${label}: ${draft.doseMedication.trim()} — ${draft.doseValue.trim()}`
+  const changes = doseChangesFor(draft)
+  if (changes.length) {
+    // Semicolons rather than a count: two medications and their new doses still
+    // fit a queue row, and a row that says "2 medications" sends the reader into
+    // the review to find out which.
+    return `${label}: ${changes
+      .map((change) => `${change.medication.trim()} — ${change.value.trim()}`)
+      .join('; ')}`
   }
 
   if (draft.disposition === 'follow_up_needed' && draft.followUpKinds.length) {

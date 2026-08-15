@@ -4,6 +4,7 @@ import { describe, it } from 'node:test'
 import { describeDecision, describeEscalation } from './decision.ts'
 import {
   EMPTY_DRAFT,
+  type DoseChange,
   type DraftMedication,
   type ReviewDraft,
 } from '../labReviews/reviewDraft.ts'
@@ -15,6 +16,10 @@ function draft(overrides: Partial<ReviewDraft> = {}): ReviewDraft {
 
 function med(overrides: Partial<DraftMedication> = {}): DraftMedication {
   return { medicationId: null, name: '', dose: '', sig: '', ...overrides }
+}
+
+function change(overrides: Partial<DoseChange> = {}): DoseChange {
+  return { medicationId: null, medication: '', from: '', value: '', sig: '', ...overrides }
 }
 
 describe('describeDecision', () => {
@@ -30,7 +35,10 @@ describe('describeDecision', () => {
 
   it('states a dose change with its target', () => {
     const described = describeDecision(
-      draft({ disposition: 'dose_change', doseMedication: 'Testosterone cypionate', doseValue: '160mg/wk' })
+      draft({
+        disposition: 'dose_change',
+        doseChanges: [change({ medication: 'Testosterone cypionate', value: '160mg/wk' })],
+      })
     )
     assert.match(described, /Testosterone cypionate to 160mg\/wk/)
   })
@@ -39,10 +47,15 @@ describe('describeDecision', () => {
     const described = describeDecision(
       draft({
         disposition: 'dose_change',
-        doseMedication: 'Testosterone cypionate',
-        doseFrom: '140mg/week',
-        doseValue: '160mg/week',
-        doseSig: 'Inject .4mL subcutaneously every 3.5 days.',
+        doseChanges: [
+          change({
+            medicationId: 4821,
+            medication: 'Testosterone cypionate',
+            from: '140mg/week',
+            value: '160mg/week',
+            sig: 'Inject .4mL subcutaneously every 3.5 days.',
+          }),
+        ],
       })
     )
 
@@ -52,8 +65,26 @@ describe('describeDecision', () => {
     )
   })
 
+  it('gives each changed medication its own sentence', () => {
+    // One sentence for two changes would get one plan written for two doses.
+    const described = describeDecision(
+      draft({
+        disposition: 'dose_change',
+        doseChanges: [
+          change({ medication: 'Testosterone cypionate', from: '160mg/week', value: '140mg/week' }),
+          change({ medication: 'Anastrozole', from: '0.5mg twice weekly', value: '0.25mg twice weekly' }),
+          change({ value: 'ignored, nothing is named' }),
+        ],
+      })
+    )
+
+    assert.match(described, /Dose change: Testosterone cypionate from 160mg\/week to 140mg\/week\./)
+    assert.match(described, /Dose change: Anastrozole from 0\.5mg twice weekly to 0\.25mg twice weekly\./)
+    assert.doesNotMatch(described, /ignored/)
+  })
+
   it('does not claim a dose when only the medication is named', () => {
-    const described = describeDecision(draft({ doseMedication: 'Anastrozole' }))
+    const described = describeDecision(draft({ doseChanges: [change({ medication: 'Anastrozole' })] }))
     assert.match(described, /Dose change: Anastrozole\./)
     assert.doesNotMatch(described, / to \./)
   })
@@ -78,8 +109,7 @@ describe('describeDecision', () => {
     const described = describeDecision(
       draft({
         disposition: 'dose_change',
-        doseMedication: 'Testosterone cypionate',
-        doseValue: '160mg/week',
+        doseChanges: [change({ medication: 'Testosterone cypionate', value: '160mg/week' })],
         newMedications: [
           med({
             medicationId: 13,

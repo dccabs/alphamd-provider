@@ -6,6 +6,7 @@ import { planCompletion, validateCompletion } from './completion.ts'
 import {
   DISPOSITIONS,
   EMPTY_DRAFT,
+  type DoseChange,
   type DraftMedication,
   type ReviewDraft,
 } from './reviewDraft.ts'
@@ -18,6 +19,25 @@ const med = (patch: Partial<DraftMedication> = {}): DraftMedication => ({
   dose: '',
   sig: '',
   ...patch,
+})
+
+const change = (patch: Partial<DoseChange> = {}): DoseChange => ({
+  medicationId: null,
+  medication: '',
+  from: '',
+  value: '',
+  sig: '',
+  ...patch,
+})
+
+/** The dose change most of these tests are about: testosterone raised a level,
+ *  with the sig the level works out to. */
+const testosterone = change({
+  medicationId: 4821,
+  medication: 'Testosterone cypionate',
+  from: '140mg/week',
+  value: '160mg/week',
+  sig: 'Inject .4mL subcutaneously every 3.5 days.',
 })
 
 test('a review with no disposition cannot be finished', () => {
@@ -47,24 +67,68 @@ test('continue protocol cannot be finished with a medication added', () => {
   )
 })
 
-test('a dose change must name the medication and the dose', () => {
-  const problems = validateCompletion(draft({ disposition: 'dose_change' }))
-  assert.equal(problems.length, 2)
+test('a dose change must record at least one change', () => {
+  assert.deepEqual(validateCompletion(draft({ disposition: 'dose_change' })), [
+    'Record the dose change: choose a medication and set its new dose.',
+  ])
 
   assert.deepEqual(
+    validateCompletion(draft({ disposition: 'dose_change', doseChanges: [testosterone] })),
+    []
+  )
+})
+
+test('a half-recorded change does not satisfy a dose change', () => {
+  // Either half alone describes nothing anyone downstream could act on.
+  for (const half of [
+    change({ medication: 'Test Cyp' }),
+    change({ value: '180 mg/wk' }),
+    change({ medication: '  ', value: '\t' }),
+  ]) {
+    assert.equal(
+      validateCompletion(draft({ disposition: 'dose_change', doseChanges: [half] })).length,
+      1
+    )
+  }
+})
+
+test('any number of dose changes satisfies the disposition', () => {
+  assert.deepEqual(
     validateCompletion(
-      draft({ disposition: 'dose_change', doseMedication: 'Test Cyp', doseValue: '180 mg/wk' })
+      draft({
+        disposition: 'dose_change',
+        doseChanges: [
+          testosterone,
+          change({ medicationId: 4822, medication: 'Anastrozole', value: '0.25mg twice weekly' }),
+        ],
+      })
     ),
     []
   )
 })
 
-test('whitespace does not satisfy a dose change', () => {
-  assert.equal(
+test('a dose change under another disposition stops the review being finished', () => {
+  // Recorded and then landed on a different disposition. The change stays in the
+  // draft, so this is what makes the provider deal with it rather than have it
+  // quietly dropped from the note.
+  for (const disposition of ['continue_protocol', 'follow_up_needed'] as const) {
+    const problems = validateCompletion(
+      draft({ disposition, followUpKinds: ['more_labs'], doseChanges: [testosterone] })
+    )
+    assert.deepEqual(
+      problems,
+      ['A dose change is only recorded under the Dose change disposition. Remove it, or choose Dose change.'],
+      disposition
+    )
+  }
+})
+
+test('a half-recorded change left under another disposition holds nothing up', () => {
+  assert.deepEqual(
     validateCompletion(
-      draft({ disposition: 'dose_change', doseMedication: '  ', doseValue: '\t' })
-    ).length,
-    2
+      draft({ disposition: 'continue_protocol', doseChanges: [change({ medication: 'Test Cyp' })] })
+    ),
+    []
   )
 })
 
@@ -113,12 +177,7 @@ test('more-labs alone is a complete follow-up', () => {
 test('every disposition clears the "Needs lab review" flag', () => {
   for (const disposition of DISPOSITIONS) {
     const plan = planCompletion(
-      draft({
-        disposition,
-        doseMedication: 'Test Cyp',
-        doseValue: '180 mg/wk',
-        followUpKinds: ['more_labs'],
-      }),
+      draft({ disposition, doseChanges: [testosterone], followUpKinds: ['more_labs'] }),
       'Dr Smith'
     )
     assert.deepEqual(plan.removeFlagIds, [FLAG.needsLabReview], disposition)
@@ -128,12 +187,7 @@ test('every disposition clears the "Needs lab review" flag', () => {
 test('only continue-protocol claims no changes were recommended', () => {
   for (const disposition of DISPOSITIONS) {
     const plan = planCompletion(
-      draft({
-        disposition,
-        doseMedication: 'Test Cyp',
-        doseValue: '180 mg/wk',
-        followUpKinds: ['more_labs'],
-      }),
+      draft({ disposition, doseChanges: [testosterone], followUpKinds: ['more_labs'] }),
       'Dr Smith'
     )
     assert.equal(
@@ -147,12 +201,7 @@ test('only continue-protocol claims no changes were recommended', () => {
 test('dispositions that need downstream work raise the follow-up flag', () => {
   for (const disposition of ['dose_change', 'follow_up_needed', 'treatment_recommended'] as const) {
     const plan = planCompletion(
-      draft({
-        disposition,
-        doseMedication: 'Test Cyp',
-        doseValue: '180 mg/wk',
-        followUpKinds: ['more_labs'],
-      }),
+      draft({ disposition, doseChanges: [testosterone], followUpKinds: ['more_labs'] }),
       'Dr Smith'
     )
     assert.ok(plan.addFlagIds.includes(FLAG.followUpRequired), disposition)
@@ -241,10 +290,7 @@ test('a dose change and an added medication both reach customer service', () => 
   const plan = planCompletion(
     draft({
       disposition: 'dose_change',
-      doseMedication: 'Testosterone cypionate',
-      doseFrom: '140mg/week',
-      doseValue: '160mg/week',
-      doseSig: 'Inject .4mL subcutaneously every 3.5 days.',
+      doseChanges: [testosterone],
       newMedications: [
         med({
           medicationId: 13,
@@ -309,13 +355,7 @@ test('the detail keeps the catalog row and the sig behind each added medication'
 
 test('the note says what the dose changed from, not only what it is now', () => {
   const plan = planCompletion(
-    draft({
-      disposition: 'dose_change',
-      doseMedication: 'Testosterone cypionate',
-      doseFrom: '140mg/week',
-      doseValue: '160mg/week',
-      doseSig: 'Inject .4mL subcutaneously every 3.5 days.',
-    }),
+    draft({ disposition: 'dose_change', doseChanges: [testosterone] }),
     'Dr Smith'
   )
 
@@ -325,14 +365,58 @@ test('the note says what the dose changed from, not only what it is now', () => 
   )
 })
 
+test('two medications changed in one review each get their own line', () => {
+  // ALP-2: a provider adjusting two prescriptions in one sitting. Both have to
+  // survive to the chart and to whoever updates the prescriptions.
+  const plan = planCompletion(
+    draft({
+      disposition: 'dose_change',
+      doseChanges: [
+        testosterone,
+        change({
+          medicationId: 4822,
+          medication: 'Anastrozole',
+          from: '0.5mg twice weekly',
+          value: '0.25mg twice weekly',
+        }),
+      ],
+    }),
+    'Dr Smith'
+  )
+
+  assert.match(plan.note, /Dose change: Testosterone cypionate — 160mg\/week \(was 140mg\/week\)/)
+  assert.match(plan.note, /Dose change: Anastrozole — 0\.25mg twice weekly \(was 0\.5mg twice weekly\)/)
+  assert.match(plan.note, /For customer service: Dose change — Testosterone cypionate/)
+  assert.match(plan.note, /Dose change — Anastrozole: 0\.5mg twice weekly → 0\.25mg twice weekly\./)
+
+  // Confirmed first is written first, in both halves, so the note reads in the
+  // order the decisions were made.
+  const chart = plan.note.indexOf('Dose change: Testosterone')
+  const chartSecond = plan.note.indexOf('Dose change: Anastrozole')
+  assert.ok(chart < chartSecond && chart !== -1)
+  assert.ok(
+    plan.note.indexOf('Dose change — Testosterone') < plan.note.indexOf('Dose change — Anastrozole')
+  )
+})
+
+test('a half-recorded change is left out of the note rather than half-written', () => {
+  const plan = planCompletion(
+    draft({
+      disposition: 'dose_change',
+      doseChanges: [testosterone, change({ medicationId: 4822, medication: 'Anastrozole' })],
+    }),
+    'Dr Smith'
+  )
+
+  assert.match(plan.note, /Dose change: Testosterone cypionate/)
+  assert.doesNotMatch(plan.note, /Anastrozole/)
+})
+
 test('a dose change reaches customer service without being retyped', () => {
   const plan = planCompletion(
     draft({
       disposition: 'dose_change',
-      doseMedication: 'Testosterone cypionate',
-      doseFrom: '140mg/week',
-      doseValue: '160mg/week',
-      doseSig: 'Inject .4mL subcutaneously every 3.5 days.',
+      doseChanges: [testosterone],
       csInstructions: 'Also book a phlebotomy',
     }),
     'Dr Smith'
@@ -351,10 +435,15 @@ test('changing only the route does not read as an error in the note', () => {
   const plan = planCompletion(
     draft({
       disposition: 'dose_change',
-      doseMedication: 'Testosterone cypionate',
-      doseFrom: '160mg/week',
-      doseValue: '160mg/week',
-      doseSig: 'Inject .4mL intramuscularly every 3.5 days.',
+      doseChanges: [
+        change({
+          medicationId: 4821,
+          medication: 'Testosterone cypionate',
+          from: '160mg/week',
+          value: '160mg/week',
+          sig: 'Inject .4mL intramuscularly every 3.5 days.',
+        }),
+      ],
     }),
     'Dr Smith'
   )
@@ -371,9 +460,14 @@ test('a dose typed as free text carries no generated instruction', () => {
   const plan = planCompletion(
     draft({
       disposition: 'dose_change',
-      doseMedication: 'Anastrozole',
-      doseFrom: '0.5mg - Take 1/2 tablet (0.50mg) by mouth twice weekly',
-      doseValue: '0.25mg twice weekly',
+      doseChanges: [
+        change({
+          medicationId: 4822,
+          medication: 'Anastrozole',
+          from: '0.5mg - Take 1/2 tablet (0.50mg) by mouth twice weekly',
+          value: '0.25mg twice weekly',
+        }),
+      ],
     }),
     'Dr Smith'
   )
@@ -383,18 +477,17 @@ test('a dose typed as free text carries no generated instruction', () => {
 })
 
 test('only a dose change puts a dose in the customer service block', () => {
+  // Left behind by choosing dose change and then changing to continue. Finishing
+  // is blocked while it is there, and if it somehow is not, the note must still
+  // not contradict the disposition it was filed under.
   const plan = planCompletion(
-    draft({
-      disposition: 'continue_protocol',
-      // Left behind by choosing dose change and then changing to continue.
-      doseMedication: 'Testosterone cypionate',
-      doseValue: '160mg/week',
-    }),
+    draft({ disposition: 'continue_protocol', doseChanges: [testosterone] }),
     'Dr Smith'
   )
 
   assert.doesNotMatch(plan.note, /Dose change/)
   assert.doesNotMatch(plan.note, /For customer service/)
+  assert.deepEqual(plan.detail.doseChanges, [])
 })
 
 test('the note is plain text — provider input is never wrapped in markup', () => {
@@ -423,7 +516,10 @@ test('resolution stays one line even for a multi-line provider note', () => {
 test('resolution leads with the most specific detail available', () => {
   assert.equal(
     planCompletion(
-      draft({ disposition: 'dose_change', doseMedication: 'Test Cyp', doseValue: '180 mg/wk' }),
+      draft({
+        disposition: 'dose_change',
+        doseChanges: [change({ medicationId: 4821, medication: 'Test Cyp', value: '180 mg/wk' })],
+      }),
       'Dr Smith'
     ).resolution,
     'Dose change: Test Cyp — 180 mg/wk'
@@ -435,9 +531,57 @@ test('resolution leads with the most specific detail available', () => {
   )
 })
 
+test('resolution names every medication changed, since the queue shows only this line', () => {
+  assert.equal(
+    planCompletion(
+      draft({
+        disposition: 'dose_change',
+        doseChanges: [
+          testosterone,
+          change({ medicationId: 4822, medication: 'Anastrozole', value: '0.25mg twice weekly' }),
+        ],
+      }),
+      'Dr Smith'
+    ).resolution,
+    'Dose change: Testosterone cypionate — 160mg/week; Anastrozole — 0.25mg twice weekly'
+  )
+})
+
+test('the detail keeps the prescription behind each dose change', () => {
+  const plan = planCompletion(
+    draft({
+      disposition: 'dose_change',
+      doseChanges: [
+        testosterone,
+        // Typed into an older draft, so there is no prescription row and no
+        // dose to have changed from.
+        change({ medication: 'Anastrozole', value: '0.25mg twice weekly' }),
+      ],
+    }),
+    'Dr Smith'
+  )
+
+  assert.deepEqual(plan.detail.doseChanges, [
+    {
+      medicationId: 4821,
+      medication: 'Testosterone cypionate',
+      from: '140mg/week',
+      value: '160mg/week',
+      sig: 'Inject .4mL subcutaneously every 3.5 days.',
+    },
+    {
+      medicationId: null,
+      medication: 'Anastrozole',
+      from: null,
+      value: '0.25mg twice weekly',
+      sig: null,
+    },
+  ])
+})
+
 test('the structured detail keeps blanks as null rather than empty strings', () => {
   const plan = planCompletion(draft({ disposition: 'continue_protocol' }), 'Dr Smith')
-  assert.equal(plan.detail.doseMedication, null)
+  assert.deepEqual(plan.detail.doseChanges, [])
   assert.equal(plan.detail.concerns, null)
   assert.deepEqual(plan.detail.newMedications, [])
   assert.equal(plan.detail.disposition, 'continue_protocol')

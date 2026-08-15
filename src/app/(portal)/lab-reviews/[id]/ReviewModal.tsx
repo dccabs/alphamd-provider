@@ -176,6 +176,7 @@ export function ReviewModal({
   const options = dispositionsFor(patientStatus)
   const followUp = draft.disposition === 'follow_up_needed'
   const showDose = draft.disposition === 'dose_change'
+  const showDoseChanges = showDose || draft.doseChanges.length > 0
   const showInstructions = followUp && draft.followUpKinds.includes('patient_instructions')
 
   // Continuing as designed is a statement that nothing is changing, so there is
@@ -285,30 +286,16 @@ export function ReviewModal({
             </fieldset>
           )}
 
-          {showDose && (
+          {/* Stays on screen under another disposition while changes are still
+              recorded, because completion refuses them there and this is the only
+              place they can be removed. */}
+          {showDoseChanges && (
             <DoseChangePanel
               medications={medications}
               dosageOptions={dosageOptions}
-              change={
-                draft.doseMedication.trim()
-                  ? {
-                      medicationId: draft.doseMedicationId,
-                      medication: draft.doseMedication,
-                      from: draft.doseFrom,
-                      value: draft.doseValue,
-                      sig: draft.doseSig,
-                    }
-                  : null
-              }
-              onChange={(change) =>
-                update({
-                  doseMedicationId: change?.medicationId ?? null,
-                  doseMedication: change?.medication ?? '',
-                  doseFrom: change?.from ?? '',
-                  doseValue: change?.value ?? '',
-                  doseSig: change?.sig ?? '',
-                })
-              }
+              changes={draft.doseChanges}
+              canChange={showDose}
+              onChange={(doseChanges) => update({ doseChanges })}
             />
           )}
 
