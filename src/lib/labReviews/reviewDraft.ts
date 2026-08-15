@@ -61,7 +61,9 @@ export type FollowUpKind = (typeof FOLLOW_UP_KINDS)[number]
 export const FOLLOW_UP_LABELS: Record<FollowUpKind, string> = {
   more_labs: 'Needs more labs',
   new_medication: 'Add a new medication',
-  patient_instructions: 'Specific patient instructions',
+  // The id still says "instructions" because it is stored on reviews already
+  // finished; what it points at is now the message the patient is sent.
+  patient_instructions: 'A specific message for the patient',
 }
 
 /**
@@ -106,14 +108,23 @@ export type DraftMedication = {
   sig: string
 }
 
+/**
+ * Three things get written in a review, one per reader.
+ *
+ * `providerNote` is the chart, `patientMessage` is what the patient is sent, and
+ * `csInstructions` is what a non-clinical teammate has to do. An "areas of
+ * concern" box used to sit alongside them and was cut: a concern worth recording
+ * is part of the assessment, and having somewhere else to put it only split the
+ * clinical reasoning across two boxes that were then both read as incomplete.
+ */
 export type ReviewDraft = {
   disposition: Disposition | null
   followUpKinds: FollowUpKind[]
   /** In the order the provider confirmed them, at most one per prescription. */
   doseChanges: DoseChange[]
-  instructions: string
+  /** What the patient is told, in their words rather than the chart's. */
+  patientMessage: string
   newMedications: DraftMedication[]
-  concerns: string
   csInstructions: string
   /** The provider's own half of the chart note. The generated half is composed at
    *  completion, not stored here. */
@@ -124,9 +135,8 @@ export const EMPTY_DRAFT: ReviewDraft = {
   disposition: null,
   followUpKinds: [],
   doseChanges: [],
-  instructions: '',
+  patientMessage: '',
   newMedications: [],
-  concerns: '',
   csInstructions: '',
   providerNote: '',
 }
@@ -180,6 +190,18 @@ function doseChangesFrom(raw: Record<string, unknown>): DoseChange[] {
   ]
 }
 
+/**
+ * The chart note, plus anything a retired "areas of concern" box was holding.
+ *
+ * Concerns were clinical reasoning in the provider's own words, written to be
+ * read by whoever picks up the chart — which is what the note is. So an open
+ * draft carrying both keeps both, joined as separate paragraphs, rather than
+ * losing the half whose box no longer exists.
+ */
+function providerNoteFrom(raw: Record<string, unknown>): string {
+  return [str(raw.providerNote).trim(), str(raw.concerns).trim()].filter(Boolean).join('\n\n')
+}
+
 /** Tolerant read of the `draft` column. Unknown keys are dropped and bad types
  *  fall back, so a shape change in this file cannot corrupt an open review. */
 export function parseDraft(json: unknown): ReviewDraft {
@@ -210,11 +232,13 @@ export function parseDraft(json: unknown): ReviewDraft {
     // hand-edited or older payload can carry repeats.
     followUpKinds: [...new Set(followUpKinds)],
     doseChanges: doseChangesFrom(raw),
-    instructions: str(raw.instructions),
+    // `instructions` is what this field was called while it held dosing and
+    // timing directions for the patient. It became the message they are sent,
+    // which is the same text with a wider job, so an open draft keeps it.
+    patientMessage: str(raw.patientMessage) || str(raw.instructions),
     newMedications,
-    concerns: str(raw.concerns),
     csInstructions: str(raw.csInstructions),
-    providerNote: str(raw.providerNote),
+    providerNote: providerNoteFrom(raw),
   }
 }
 
@@ -226,8 +250,7 @@ export function isDraftEmpty(draft: ReviewDraft): boolean {
     draft.followUpKinds.length === 0 &&
     draft.newMedications.every((m) => !m.name.trim() && !m.dose.trim() && !m.sig.trim()) &&
     draft.doseChanges.every((c) => !c.medication.trim() && !c.value.trim()) &&
-    !draft.instructions.trim() &&
-    !draft.concerns.trim() &&
+    !draft.patientMessage.trim() &&
     !draft.csInstructions.trim() &&
     !draft.providerNote.trim()
   )

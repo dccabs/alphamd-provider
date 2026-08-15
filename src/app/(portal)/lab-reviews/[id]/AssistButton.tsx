@@ -7,12 +7,14 @@ import { AI_TASK_LABELS, type AiTask } from '@/lib/ai/tasks'
 import type { ReplyIdentity } from '@/lib/labReviews/replyIdentity'
 
 /**
- * "Draft with AI" for a single textarea.
+ * "Draft with AI" for a textarea that is written from the patient's history — the
+ * escalation handoff note and the customer-service reply.
  *
- * One component serves all three callers — the completion note, the escalation
- * note, and the customer-service reply — so the interaction is identical
- * everywhere: the text streams into the field the provider is already looking at
- * rather than into a preview they then have to copy.
+ * The text streams into the field the provider is already looking at rather than
+ * into a preview they then have to copy, which suits a field that is usually
+ * empty when the button is pressed. The review flyout's own fields work the other
+ * way round, through `FieldAssistButton`: there the provider has already written
+ * something and a draft has to be inspected beside it before it lands.
  *
  * Two properties are deliberate and worth keeping:
  *

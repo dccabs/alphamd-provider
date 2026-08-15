@@ -36,7 +36,7 @@ test('a full draft round-trips', () => {
         sig: 'Inject .45mL subcutaneously every 3.5 days.',
       },
     ],
-    instructions: 'Recheck in 8 weeks',
+    patientMessage: 'Your next draw is in 8 weeks.',
     newMedications: [
       {
         medicationId: 13,
@@ -45,12 +45,47 @@ test('a full draft round-trips', () => {
         sig: '',
       },
     ],
-    concerns: 'Hct trending up',
     csInstructions: 'Book a phlebotomy',
     providerNote: 'Discussed with patient',
   }
 
   assert.deepEqual(parseDraft(stored), stored)
+})
+
+test('a draft written when the patient message was called instructions still reads', () => {
+  const draft = parseDraft({ instructions: 'Start the new dose with your next shipment.' })
+  assert.equal(draft.patientMessage, 'Start the new dose with your next shipment.')
+})
+
+test('the new patient message key wins over the old one', () => {
+  // Both at once can only come from a hand-edited payload, and the key this
+  // build writes is the one it should trust.
+  const draft = parseDraft({ patientMessage: 'current', instructions: 'stale' })
+  assert.equal(draft.patientMessage, 'current')
+})
+
+test('areas of concern from a retired box is kept on the chart note', () => {
+  // Live in production when the box was cut. It is clinical reasoning in the
+  // provider's own words, so dropping it would lose work nobody could recover.
+  const draft = parseDraft({
+    providerNote: 'Lowered testosterone for the rising hematocrit.',
+    concerns: 'Hct 52.4, up from 49.1.',
+  })
+
+  assert.equal(
+    draft.providerNote,
+    'Lowered testosterone for the rising hematocrit.\n\nHct 52.4, up from 49.1.'
+  )
+  assert.ok(!('concerns' in draft))
+})
+
+test('concerns with no chart note becomes the chart note', () => {
+  assert.equal(parseDraft({ concerns: 'Hct 52.4.' }).providerNote, 'Hct 52.4.')
+})
+
+test('an empty concerns key does not pad the chart note', () => {
+  assert.equal(parseDraft({ providerNote: 'Stable.', concerns: '   ' }).providerNote, 'Stable.')
+  assert.equal(parseDraft({ providerNote: 'Stable.' }).providerNote, 'Stable.')
 })
 
 test('an unknown disposition is dropped rather than trusted', () => {
@@ -182,8 +217,8 @@ test('a prescription id on a dose change is only kept if it could be a row id', 
 })
 
 test('non-string text fields fall back to empty', () => {
-  const draft = parseDraft({ concerns: { a: 1 }, providerNote: 12 })
-  assert.equal(draft.concerns, '')
+  const draft = parseDraft({ patientMessage: { a: 1 }, providerNote: 12, concerns: [] })
+  assert.equal(draft.patientMessage, '')
   assert.equal(draft.providerNote, '')
 })
 
@@ -192,13 +227,15 @@ test('the empty draft is empty', () => {
 })
 
 test('any single filled field makes a draft worth saving', () => {
-  assert.equal(isDraftEmpty({ ...EMPTY_DRAFT, concerns: 'x' }), false)
+  assert.equal(isDraftEmpty({ ...EMPTY_DRAFT, patientMessage: 'x' }), false)
+  assert.equal(isDraftEmpty({ ...EMPTY_DRAFT, csInstructions: 'x' }), false)
+  assert.equal(isDraftEmpty({ ...EMPTY_DRAFT, providerNote: 'x' }), false)
   assert.equal(isDraftEmpty({ ...EMPTY_DRAFT, disposition: 'continue_protocol' }), false)
   assert.equal(isDraftEmpty({ ...EMPTY_DRAFT, followUpKinds: ['more_labs'] }), false)
 })
 
 test('whitespace alone is not worth saving', () => {
-  assert.ok(isDraftEmpty({ ...EMPTY_DRAFT, concerns: '   ', providerNote: '\n' }))
+  assert.ok(isDraftEmpty({ ...EMPTY_DRAFT, patientMessage: '   ', providerNote: '\n' }))
 })
 
 test('a blank medication row added and not filled in is not worth saving', () => {

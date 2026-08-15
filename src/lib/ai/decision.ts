@@ -4,20 +4,30 @@ import {
   type ReviewDraft,
 } from '../labReviews/reviewDraft.ts'
 import { ESCALATION_TARGET_LABELS, type Escalation } from '../labReviews/needsAttention.ts'
+import type { ReviewField } from './reviewFields.ts'
 
 /**
- * What the provider has decided so far, rendered for the prompt.
+ * What the provider has decided so far, rendered a line at a time.
  *
- * The assistant reads the labs from `lab_review_reports`, but the *decision* only
- * exists in the flyout's unsaved draft. Without this the model can describe the
- * bloodwork and then guess at the plan, which is precisely the sentence a
- * clinician must not have to catch. So the structured choices are handed over as
- * the instruction, and the model's job is narrowed to writing them up.
+ * This is the *only* material a field draft is given: the decision exists nowhere
+ * but the flyout's unsaved draft, and nothing about the patient is sent alongside
+ * it. Every line here is therefore something the provider themselves entered,
+ * which is what makes it safe to let the assistant treat these as facts.
+ *
+ * It is also shown to the provider verbatim in the assist modal, so it is written
+ * as readable sentences rather than as prompt scaffolding, and it comes back empty
+ * — not with a fallback sentence — when nothing has been recorded.
  *
  * Pure, so the wording is testable without a database or an API key.
  */
 
-export function describeDecision(draft: ReviewDraft): string {
+export function describeDecision(
+  draft: ReviewDraft,
+  /** The field being drafted, whose own text is left out: handing a field back to
+   *  the model as context for itself invites it to be quoted rather than
+   *  rewritten. */
+  { omit }: { omit?: ReviewField } = {}
+): string {
   const lines: string[] = []
 
   if (draft.disposition) {
@@ -72,25 +82,19 @@ export function describeDecision(draft: ReviewDraft): string {
     )
   }
 
-  if (draft.instructions.trim()) {
-    lines.push(`Instructions for the patient: ${draft.instructions.trim()}`)
+  if (omit !== 'patientMessage' && draft.patientMessage.trim()) {
+    lines.push(`The message being sent to the patient: ${draft.patientMessage.trim()}`)
   }
 
-  if (draft.concerns.trim()) {
-    lines.push(`Areas of concern the provider flagged: ${draft.concerns.trim()}`)
-  }
-
-  if (draft.csInstructions.trim()) {
+  if (omit !== 'csInstructions' && draft.csInstructions.trim()) {
     lines.push(`Handed to customer service: ${draft.csInstructions.trim()}`)
   }
 
-  if (!lines.length) {
-    // Said explicitly rather than left blank, so the model states the findings
-    // and stops instead of inventing a plan to fill the gap.
-    return 'The provider has not recorded a decision yet. Summarize the objective lab findings only, and do not state a plan.'
+  if (omit !== 'providerNote' && draft.providerNote.trim()) {
+    lines.push(`The provider's own note for the chart: ${draft.providerNote.trim()}`)
   }
 
-  return `The provider has already recorded these decisions. Write them up faithfully and do not contradict or extend them:\n${lines.join('\n')}`
+  return lines.join('\n')
 }
 
 /** The same idea for an escalation: who it is going to, and why. */

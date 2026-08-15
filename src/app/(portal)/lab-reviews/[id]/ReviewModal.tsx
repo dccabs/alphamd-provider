@@ -28,8 +28,9 @@ import {
 } from '@/lib/labReviews/reviewDraft'
 import { describeDecision } from '@/lib/ai/decision'
 import { completeLabReviewAction, saveReviewDraftAction } from '../actions'
-import { AssistButton } from './AssistButton'
 import { DoseChangePanel } from './DoseChangePanel'
+import { FieldAssistButton } from './FieldAssistButton'
+import { FinalizeSummaryDialog } from './FinalizeSummaryDialog'
 import { NewMedicationPanel } from './NewMedicationPanel'
 import type { CatalogMedication, DosageOption, Medication } from './types'
 
@@ -51,6 +52,16 @@ import type { CatalogMedication, DosageOption, Medication } from './types'
 
 const DEBOUNCE_MS = 1200
 
+/**
+ * Whether approving the summary actually finishes the review.
+ *
+ * Off while the summary itself is what is being reviewed. `finalize` below is the
+ * write path and is unchanged — it clears "Needs lab review", may add flags, may
+ * move the patient's status and writes a note onto the chart — so switching this
+ * on is the whole change, in one line, once the summary reads correctly.
+ */
+const APPROVAL_FINISHES: boolean = false
+
 type SaveState =
   | { kind: 'clean' }
   | { kind: 'saving' }
@@ -63,6 +74,8 @@ type SaveState =
 export function ReviewModal({
   reviewId,
   patientName,
+  patientFirstName,
+  providerName,
   patientStatus,
   collectionDate,
   medications,
@@ -75,6 +88,11 @@ export function ReviewModal({
 }: {
   reviewId: string
   patientName: string
+  /** What the patient is called, for the one field written to them. */
+  patientFirstName: string | null
+  /** The signed-in provider, as the chart note will be signed. Shown in the
+   *  summary so the note is previewed exactly as it will be written. */
+  providerName: string
   patientStatus: string | null
   collectionDate: string | null
   /** The patient's prescriptions, which are what a dose change picks from. */
@@ -101,6 +119,8 @@ export function ReviewModal({
    *  on mount for a draft that was only rehydrated, not changed. */
   const [edits, setEdits] = useState(0)
   const [finalizing, setFinalizing] = useState(false)
+  /** The confirmation summary, over the flyout. */
+  const [summary, setSummary] = useState(false)
 
   // The debounce timer and the close handler both need whatever the newest draft
   // is at the moment they run, not the one captured when they were created.
@@ -158,7 +178,9 @@ export function ReviewModal({
    *  actually protects the chart. */
   const problems = validateCompletion(draft)
 
+  /** Reached from the summary's Approve button, and only when finishing is on. */
   const finalize = async () => {
+    setSummary(false)
     setFinalizing(true)
     const result = await completeLabReviewAction(reviewId, JSON.stringify(latest.current))
     setFinalizing(false)
@@ -177,7 +199,6 @@ export function ReviewModal({
   const followUp = draft.disposition === 'follow_up_needed'
   const showDose = draft.disposition === 'dose_change'
   const showDoseChanges = showDose || draft.doseChanges.length > 0
-  const showInstructions = followUp && draft.followUpKinds.includes('patient_instructions')
 
   // Continuing as designed is a statement that nothing is changing, so there is
   // nothing to add. Medications added before the provider landed on it are still
@@ -299,24 +320,6 @@ export function ReviewModal({
             />
           )}
 
-          {showInstructions && (
-            <div className="flex flex-col gap-2">
-              <Label
-                htmlFor="new-instructions"
-                className="text-xs font-bold tracking-wider text-muted-foreground"
-              >
-                PATIENT INSTRUCTIONS
-              </Label>
-              <Textarea
-                id="new-instructions"
-                rows={4}
-                placeholder="Instructions for the patient (timing, titration, follow-up draw)…"
-                value={draft.instructions}
-                onChange={(e) => update({ instructions: e.target.value })}
-              />
-            </div>
-          )}
-
           {/* Under every disposition but "continue protocol". Raising a dose and
               starting something new is one decision, and a provider who has
               picked "Dose change" still has to be able to record the second half
@@ -332,56 +335,88 @@ export function ReviewModal({
             />
           )}
 
+          {/* The chart note comes first because the other two are written from it:
+              once the assessment exists, the patient message and the customer
+              service hand-off have something to relay. */}
           <div className="flex flex-col gap-2">
-            <Label
-              htmlFor="areas-of-concern"
-              className="text-xs font-bold tracking-wider text-muted-foreground"
-            >
-              AREAS OF CONCERN
-            </Label>
-            <Textarea
-              id="areas-of-concern"
-              rows={4}
-              placeholder="Clinical concerns to document (e.g. Hct trending up — recheck CBC in 8 weeks)…"
-              value={draft.concerns}
-              onChange={(e) => update({ concerns: e.target.value })}
-            />
-          </div>
-
-          <div className="flex flex-col gap-2">
-            <Label
-              htmlFor="provider-note"
-              className="text-xs font-bold tracking-wider text-muted-foreground"
-            >
-              NOTE FOR THE CHART
-            </Label>
+            <div className="flex items-center justify-between gap-2">
+              <Label
+                htmlFor="provider-note"
+                className="text-xs font-bold tracking-wider text-muted-foreground"
+              >
+                NOTE FOR THE CHART
+              </Label>
+              {/* Only this half of the note is ever drafted: the structured half —
+                  the disposition, the doses, the medications added — is composed
+                  at completion, and is handed over as recorded context so the
+                  prose agrees with it. */}
+              <FieldAssistButton
+                field="providerNote"
+                value={draft.providerNote}
+                onChange={(providerNote) => update({ providerNote })}
+                recorded={describeDecision(draft, { omit: 'providerNote' })}
+                disabled={finalizing}
+              />
+            </div>
             <Textarea
               id="provider-note"
               rows={4}
-              placeholder="Your assessment, in your own words…"
+              placeholder="What you reviewed, what it showed, your assessment and the plan…"
               value={draft.providerNote}
               onChange={(e) => update({ providerNote: e.target.value })}
             />
-            {/* The structured half of the note is composed at completion, so the
-                assistant is only ever drafting this field — and it is told the
-                disposition, which lives nowhere but this unsaved draft. */}
-            <AssistButton
-              reviewId={reviewId}
-              task="chart_note"
-              value={draft.providerNote}
-              onChange={(providerNote) => update({ providerNote })}
-              instructions={describeDecision(draft)}
-              disabled={finalizing}
+          </div>
+
+          {/* Always on screen, under every disposition. It used to appear only
+              when the follow-up checkbox asked for it, which made telling the
+              patient their labs were fine an opt-in — and a result nobody
+              communicated is the risk this whole review exists to close. */}
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center justify-between gap-2">
+              <Label
+                htmlFor="patient-message"
+                className="text-xs font-bold tracking-wider text-muted-foreground"
+              >
+                MESSAGE FOR PATIENT
+              </Label>
+              {/* The only field given the patient's name, because it is the only
+                  one addressed to them. The chart note and the customer service
+                  box are about the patient, and both read better as "the
+                  patient" than as a first name. */}
+              <FieldAssistButton
+                field="patientMessage"
+                value={draft.patientMessage}
+                onChange={(patientMessage) => update({ patientMessage })}
+                recorded={describeDecision(draft, { omit: 'patientMessage' })}
+                firstName={patientFirstName}
+                disabled={finalizing}
+              />
+            </div>
+            <Textarea
+              id="patient-message"
+              rows={4}
+              placeholder="What the patient is told — the result, what is changing, what they do next…"
+              value={draft.patientMessage}
+              onChange={(e) => update({ patientMessage: e.target.value })}
             />
           </div>
 
           <div className="flex flex-col gap-2">
-            <Label
-              htmlFor="cs-instructions"
-              className="text-xs font-bold tracking-wider text-muted-foreground"
-            >
-              INSTRUCTIONS FOR CUSTOMER SERVICE
-            </Label>
+            <div className="flex items-center justify-between gap-2">
+              <Label
+                htmlFor="cs-instructions"
+                className="text-xs font-bold tracking-wider text-muted-foreground"
+              >
+                INSTRUCTIONS FOR CUSTOMER SERVICE
+              </Label>
+              <FieldAssistButton
+                field="csInstructions"
+                value={draft.csInstructions}
+                onChange={(csInstructions) => update({ csInstructions })}
+                recorded={describeDecision(draft, { omit: 'csInstructions' })}
+                disabled={finalizing}
+              />
+            </div>
             <Textarea
               id="cs-instructions"
               rows={3}
@@ -405,7 +440,7 @@ export function ReviewModal({
               Close
             </Button>
             <Button
-              onClick={finalize}
+              onClick={() => setSummary(true)}
               disabled={finalizing || problems.length > 0}
               title={problems.length ? problems.join(' ') : undefined}
             >
@@ -413,6 +448,18 @@ export function ReviewModal({
             </Button>
           </div>
         </div>
+
+        {/* Only ever opened with `problems` empty, which is the summary's
+            precondition: it plans the completion to show it. */}
+        {summary && (
+          <FinalizeSummaryDialog
+            draft={draft}
+            patientName={patientName}
+            providerName={providerName}
+            onEdit={() => setSummary(false)}
+            onApprove={APPROVAL_FINISHES ? finalize : null}
+          />
+        )}
       </DialogContent>
     </Dialog>
   )

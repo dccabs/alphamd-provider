@@ -2,7 +2,13 @@
 // TypeScript through Node's type stripping and needs the real extension. See the
 // note on `allowImportingTsExtensions` in tsconfig.json.
 import { FLAG, PATIENT_STATUS } from './clinicalIds.ts'
-import { DISPOSITION_LABELS, FOLLOW_UP_LABELS, type ReviewDraft } from './reviewDraft.ts'
+import {
+  DISPOSITION_LABELS,
+  FOLLOW_UP_LABELS,
+  type Disposition,
+  type FollowUpKind,
+  type ReviewDraft,
+} from './reviewDraft.ts'
 
 /**
  * What finishing a lab review means, decided as a pure function.
@@ -21,13 +27,42 @@ import { DISPOSITION_LABELS, FOLLOW_UP_LABELS, type ReviewDraft } from './review
  * server-side note writer: HTML is never built from provider free text.
  */
 
+/**
+ * The structured half of a completion, for `lab_reviews.disposition_detail`.
+ *
+ * Written as jsonb, but typed here rather than left as a bag of unknowns: it is
+ * the machine-readable record of what was decided, and it is also what the
+ * confirmation screen reads to list the decision back to the provider. Every
+ * field has already been filtered and trimmed — a dose change that appears here
+ * is one that will be acted on.
+ */
+export type DispositionDetail = {
+  disposition: Disposition
+  followUpKinds: FollowUpKind[]
+  doseChanges: {
+    medicationId: number | null
+    medication: string
+    /** Null when no previous dose was recorded, or when only the route changed. */
+    from: string | null
+    value: string
+    sig: string | null
+  }[]
+  newMedications: {
+    medicationId: number | null
+    name: string
+    dose: string
+    sig: string | null
+  }[]
+  patientMessage: string | null
+  csInstructions: string | null
+}
+
 export type CompletionPlan = {
   /** One line for `lab_reviews.resolution`, which the queue already displays. */
   resolution: string
   /** The chart note body. Plain text. */
   note: string
-  /** The structured half, for `lab_reviews.disposition_detail`. */
-  detail: Record<string, unknown>
+  detail: DispositionDetail
   addFlagIds: number[]
   /** Deleted, not deactivated — matching the main app. The flag carries no
    *  history; `lab_reviews` is the record. */
@@ -79,8 +114,8 @@ export function validateCompletion(draft: ReviewDraft): string[] {
     if (draft.followUpKinds.length === 0) {
       problems.push('Say what the follow-up needs.')
     }
-    if (draft.followUpKinds.includes('patient_instructions') && !draft.instructions.trim()) {
-      problems.push('Enter the instructions for the patient.')
+    if (draft.followUpKinds.includes('patient_instructions') && !draft.patientMessage.trim()) {
+      problems.push('Write the message for the patient.')
     }
     if (
       draft.followUpKinds.includes('new_medication') &&
@@ -200,6 +235,65 @@ function doseChangesFor(draft: ReviewDraft) {
   return draft.disposition === 'dose_change' ? recordedChanges(draft) : []
 }
 
+/**
+ * Everything customer service has to read, as one block.
+ *
+ * A dose change and an added medication lead it whether or not the provider typed
+ * anything, because somebody downstream has to update a prescription and the
+ * chart note is where they read what to do. Composed rather than appended into
+ * the provider's own text, so changing the dose twice cannot leave a stale
+ * instruction behind.
+ *
+ * Comes back empty when nobody downstream has to act, so callers can drop the
+ * header rather than emit one with nothing under it.
+ */
+function customerServiceBlock(draft: ReviewDraft): string {
+  const changes = doseChangesFor(draft)
+    .map(doseChangeLines)
+    .filter((change) => change !== null)
+  const added = namedMedications(draft)
+    .map(newMedicationLines)
+    .filter((medication) => medication !== null)
+
+  return [
+    ...changes.map((change) => change.cs),
+    ...added.map((medication) => medication.cs),
+    draft.csInstructions.trim() || null,
+  ]
+    .filter(Boolean)
+    .join('\n')
+}
+
+/**
+ * The three readers of a finished review, each handed the text they will get.
+ *
+ * Composed here rather than in the flyout because the confirmation screen shows
+ * the provider these exact strings before they approve them, and this is the
+ * same reason `doseChangeLines` lives here: a preview assembled anywhere but
+ * beside the record would eventually disagree with it, and what disagreed would
+ * be a prescription. `chart` is literally the note `planCompletion` writes.
+ *
+ * The chart text contains the other two — the note states what the patient was
+ * told and what customer service was handed — which is why they are named by
+ * their reader rather than presented as three separate documents.
+ */
+export type ReviewAudiences = {
+  /** Verbatim what the patient is sent. Empty when nothing was written. */
+  patient: string
+  /** The composed dose and medication lines, then the provider's own hand-off. */
+  customerService: string
+  /** The chart note, exactly as it will be written. */
+  chart: string
+}
+
+export function reviewAudiences(draft: ReviewDraft, providerName: string): ReviewAudiences {
+  return {
+    patient: draft.patientMessage.trim(),
+    customerService: customerServiceBlock(draft),
+    chart: planCompletion(draft, providerName).note,
+  }
+}
+
 export function planCompletion(draft: ReviewDraft, providerName: string): CompletionPlan {
   const disposition = draft.disposition
   if (!disposition) {
@@ -256,25 +350,16 @@ export function planCompletion(draft: ReviewDraft, providerName: string): Comple
     )
   }
 
-  if (draft.instructions.trim()) {
-    lines.push(`Patient instructions: ${draft.instructions.trim()}`)
+  // What the patient was told belongs on the chart: the record has to show that
+  // the result was communicated, not only that it was read.
+  if (draft.patientMessage.trim()) {
+    lines.push(`Message for the patient: ${draft.patientMessage.trim()}`)
   }
 
   for (const medication of added) lines.push(medication.chart)
 
-  if (draft.concerns.trim()) lines.push(`Areas of concern: ${draft.concerns.trim()}`)
-
-  // A dose change and an added medication lead the customer service block whether
-  // or not the provider typed anything, because somebody downstream has to update
-  // a prescription and the chart note is where they read what to do. Composed
-  // rather than appended into the provider's own text, so changing the dose twice
-  // cannot leave a stale instruction behind.
-  const csLines = [
-    ...changes.map((change) => change.cs),
-    ...added.map((medication) => medication.cs),
-    draft.csInstructions.trim() || null,
-  ].filter(Boolean)
-  if (csLines.length) lines.push(`For customer service: ${csLines.join('\n')}`)
+  const customerService = customerServiceBlock(draft)
+  if (customerService) lines.push(`For customer service: ${customerService}`)
 
   if (draft.providerNote.trim()) lines.push(draft.providerNote.trim())
 
@@ -297,8 +382,7 @@ export function planCompletion(draft: ReviewDraft, providerName: string): Comple
         dose: m.dose.trim(),
         sig: m.sig.trim() || null,
       })),
-      instructions: draft.instructions.trim() || null,
-      concerns: draft.concerns.trim() || null,
+      patientMessage: draft.patientMessage.trim() || null,
       csInstructions: draft.csInstructions.trim() || null,
     },
     addFlagIds,

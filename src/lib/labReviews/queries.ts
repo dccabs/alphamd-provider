@@ -1,6 +1,7 @@
 import 'server-only'
 
 import { ROLE } from '@/lib/authz'
+import { greetingName } from '@/lib/patientName'
 import { createAdminClient } from '@/lib/supabase/admin'
 import {
   latestCollection,
@@ -469,6 +470,9 @@ export async function getLabReview(id: string): Promise<LabReviewDetail | null> 
 export type PatientHeader = {
   patientId: string
   name: string
+  /** What to call them — see `greetingName`. Carried separately from `name`
+   *  because anything written *to* the patient opens with this. */
+  firstName: string | null
   status: string | null
   /** The raw `user_list.status` id behind that label. Carried because two features
    *  branch on it numerically — which dispositions apply, and which consultation
@@ -534,6 +538,11 @@ export async function getPatientHeader(patientId: string): Promise<PatientHeader
   return {
     patientId,
     name: fullName(data as NameRow),
+    firstName: greetingName({
+      preferredName: data.preferred_name as string | null,
+      firstName: data.first_name as string | null,
+      lastName: data.last_name as string | null,
+    }),
     status: statusLabel,
     statusId,
     age: ageFrom(data.date_of_birth as string | null),

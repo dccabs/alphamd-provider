@@ -23,6 +23,16 @@ function DialogClose({ ...props }: DialogPrimitive.Close.Props) {
   return <DialogPrimitive.Close data-slot="dialog-close" {...props} />
 }
 
+/**
+ * `forceRender` because Base UI drops the backdrop of a nested dialog, on the
+ * assumption that the dialog it opened from already dimmed the page. Every dialog
+ * in a lab review is nested inside the review sheet, and that sheet is the one
+ * surface here with no backdrop by design — it has to leave the lab document
+ * readable. Without this, a dialog opened from the sheet dims nothing at all.
+ *
+ * Two stacked backdrops would double the dim, so this holds only while the sheet
+ * stays the sole dialog that hosts others.
+ */
 function DialogOverlay({
   className,
   ...props
@@ -30,6 +40,7 @@ function DialogOverlay({
   return (
     <DialogPrimitive.Backdrop
       data-slot="dialog-overlay"
+      forceRender
       className={cn(
         "fixed inset-0 isolate z-50 bg-black/10 duration-100 supports-backdrop-filter:backdrop-blur-xs data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
         className

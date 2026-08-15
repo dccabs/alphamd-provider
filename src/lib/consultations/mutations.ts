@@ -2,6 +2,7 @@ import 'server-only'
 
 import type { ProviderAccess } from '@/lib/authz'
 import { createSingleUseSchedulingLink } from '@/lib/calendly'
+import { greetingName } from '@/lib/patientName'
 import { sendPauboxEmail } from '@/lib/paubox'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { logLabReviewEvent, resolveActor } from '@/lib/labReviews/events'
@@ -34,6 +35,7 @@ export type ConsultRequestResult =
 
 type Subject = {
   patientId: string
+  /** What the invite email opens with — see `greetingName`. */
   firstName: string | null
   fullName: string | null
   email: string | null
@@ -61,14 +63,17 @@ async function subjectOf(reviewId: string): Promise<Subject | null> {
     .maybeSingle()
   if (error) throw new Error(`user_list lookup failed: ${error.message}`)
 
-  const first = (data?.preferred_name as string | null) || (data?.first_name as string | null)
   const full =
     [data?.first_name, data?.last_name].filter(Boolean).join(' ').trim() ||
     ((data?.full_name as string | null) ?? null)
 
   return {
     patientId,
-    firstName: first?.trim() || null,
+    firstName: greetingName({
+      preferredName: data?.preferred_name as string | null,
+      firstName: data?.first_name as string | null,
+      lastName: data?.last_name as string | null,
+    }),
     fullName: full || null,
     email: (data?.email as string | null)?.trim() || null,
     gender: (data?.gender as string | null) ?? null,

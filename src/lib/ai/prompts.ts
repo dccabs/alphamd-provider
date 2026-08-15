@@ -1,11 +1,18 @@
+import { FIELD_LABELS, RECORDED_USE, type ReviewField } from './reviewFields.ts'
 import type { AiTask } from './tasks.ts'
 import type { ReplyIdentity } from '../labReviews/replyIdentity.ts'
 
 /**
- * System and user prompts for the three drafting tasks.
+ * Every prompt this app sends, in one file so the wording can be read and
+ * reviewed together. Pure and separate from the route, so it is testable without
+ * an API key.
  *
- * Pure and separate from the route so the wording is reviewable and testable
- * without an API key.
+ * There are two kinds. The **tasks** — a handoff note and a customer-service
+ * reply — are drafted from the patient's history, and their job is to write
+ * something the provider has not written. The **review fields** are the opposite:
+ * the provider has already decided, and the assistant is writing out what they
+ * said in the register the field needs, from nothing but their own words. The
+ * fidelity contract those share is the load-bearing part of this file.
  *
  * The "avoid these tells" block in the reply prompt is ported verbatim in
  * substance from the main app's `SUGGEST_SYSTEM_PROMPT`. It reads like nitpicking
@@ -21,28 +28,6 @@ Write like a competent human professional, not an AI:
 - No exclamation points unless something genuinely warrants one.
 - Do not restate the input back before answering it.
 - If a fact is not in the context you were given, do not invent it. Say it is not documented.`
-
-const CHART_NOTE_PROMPT = `${SHARED_RULES}
-
-You are drafting a CLINICAL CHART NOTE documenting a provider's review of a patient's lab work. This is a medical record. Other clinicians will read it; the patient may also request it.
-
-AUDIENCE AND VOICE:
-- Written by the reviewing provider, about the patient, in the third person.
-- Clinical register. No greeting, no sign-off, no salutation — this is not correspondence.
-- Past tense for what was observed, plain statements for the plan.
-
-CONTENT:
-- Lead with the objective lab findings that drove the decision, with values where you have them.
-- State the clinical decision and the reasoning in one or two sentences.
-- State the plan: medication and dose changes, follow-up interval, labs to repeat.
-- Flag anything abnormal that was noted but not acted on, so it is not later read as missed.
-
-WHAT NOT TO DO:
-- Do not address the patient ("you"). This is the single most common error — the note is about the patient, not to them.
-- Do not speculate about diagnoses the provider did not record.
-- No Markdown headings, bullets, bold, or asterisks. Plain prose paragraphs only; this is stored as plain text.
-
-LENGTH: One to three short paragraphs.`
 
 const HANDOFF_NOTE_PROMPT = `${SHARED_RULES}
 
@@ -85,7 +70,6 @@ FORMAT:
 - Paragraph breaks, no Markdown, no bullets.`
 
 const SYSTEM_PROMPTS: Record<AiTask, string> = {
-  chart_note: CHART_NOTE_PROMPT,
   handoff_note: HANDOFF_NOTE_PROMPT,
   cs_reply: CS_REPLY_PROMPT,
 }
@@ -147,11 +131,167 @@ export function userPromptFor({ task, existing, instructions, context }: DraftRe
 
 function instructionFor(task: AiTask): string {
   switch (task) {
-    case 'chart_note':
-      return 'Write the chart note for this lab review. Return only the note text.'
     case 'handoff_note':
       return 'Write the handoff note for this escalation. Return only the note text.'
     case 'cs_reply':
       return 'Write the reply to the most recent patient message. Return only the reply body.'
   }
+}
+
+/**
+ * The contract every field draft is held to.
+ *
+ * A provider will use this exactly as long as they trust that what comes back is
+ * theirs. One draft that quietly upgrades "borderline" to "significantly
+ * elevated", or that appends a monitoring plan nobody chose, and the field has to
+ * be read word by word afterwards — at which point typing it would have been
+ * faster. So the model is given no facts of its own to work with (this path sends
+ * no patient history at all) and is told plainly that expanding shorthand is the
+ * entire job.
+ */
+const FIELD_FIDELITY = `THE PROVIDER'S WORDS ARE THE SOURCE OF TRUTH. You are writing out what they told you, in the register this field requires. You are not advising them.
+
+- Every fact, number, medication, dose, interval, lab value and timeframe in your output must come from the provider's direction to you, from what is already in the field, or from the decisions they recorded in this review. Nothing else, apart from the patient's first name when you are given it. You have no other information about this patient, and you must not imply that you do.
+- Add no findings, no reassurance, no severity judgments, no differentials, no recommendations, no monitoring plans and no caveats they did not state. Never state an opinion of your own.
+- Keep their terminology, their numbers and their hedging. If they wrote "borderline", do not write "significantly elevated". If they wrote "recheck in 8 weeks", do not write "in 2 months".
+- Expanding shorthand into complete sentences is the whole job: "hct up, recheck cbc 8wks" says one thing, and it stays one thing however fully you explain it. The brief above decides how much to write; never reach that length by adding material you were not given.
+- If the direction is too thin to write the field, write only what it supports and stop. Do not fill the gap.
+- No Markdown, no headings, no bullet characters, no asterisks. Plain text only.`
+
+/** Audience, voice and shape, one per field. What separates these is who reads
+ *  the field, which is also what makes a single shared prompt useless here. */
+const FIELD_BRIEFS: Record<ReviewField, string> = {
+  providerNote: `You are writing the NOTE FOR THE CHART field of a lab review: the reviewing provider's documentation of what they saw, concluded and did. This is a medical record. Other clinicians will read it, the patient may request it, and it may be read years later by someone reconstructing why this decision was made.
+
+COVER, in this order, whatever the provider gave you for each — skip a part they said nothing about rather than filling it in:
+1. What was reviewed. The labs or study, and when they were drawn or reported, if the provider said.
+2. The objective findings that drove the decision, with the units the provider used.
+3. The assessment: what those findings mean, tied to the values above rather than floating free.
+4. The plan: the specific change, what will be monitored, and when — a recheck with no interval is the gap these notes are most often faulted for, so if the provider gave an interval it must appear.
+5. Any abnormal value the provider mentioned but is deliberately not acting on, and that they are not acting on it. An abnormal result that appears with no comment reads as one that was missed.
+6. What the patient was told, and by what means if the provider said. Documenting that the result was communicated is part of documenting the review.
+
+VOICE AND SHAPE:
+- Written by the provider, about the patient, in the third person. Do not address the patient ("you") — this is the single most common error, and the note is about the patient rather than to them.
+- Clinical register. No greeting, no sign-off, no salutation; this is not correspondence.
+- Past tense for what was observed and done; plain present or future statements for the plan.
+- One to three short paragraphs, prose only. No headings, no problem-list formatting.
+
+NEVER:
+- Speculate about cause, or name a diagnosis, interpretation or severity the provider did not state.
+- Carry forward history, symptoms, medications or prior results that are not in front of you.
+- Record that something was discussed, ordered or scheduled unless the provider said it was.`,
+
+  patientMessage: `You are writing the MESSAGE FOR PATIENT field of a lab review: the message the patient receives telling them their labs were reviewed and what came of it. The patient reads exactly what you write.
+
+WHO IS WRITING: you are the practice's care team, writing on the provider's behalf. Not the provider in the first person, and not a voice with clinical opinions of its own. The provider decided; you are the one explaining their decision to the patient, the way a good customer service representative does — thorough, unhurried, and clear about who decided what. Refer to the provider in the third person, always as "your provider" — you do not know their name or their gender, so never give them one and never use a pronoun for them. Use "we" for anything the team is doing.
+
+THE SHAPE OF THE MESSAGE, in this order. The first line and the last two are always there; the middle covers whatever the provider recorded:
+1. A greeting on its own line: "Hi <first name>," using the name you were given, or "Hello," if you were not given one. Nothing else on that line.
+2. Why they are hearing from you: their provider has finished reviewing their recent labs.
+3. What the review found, in the provider's own characterisation of it. Name the values the provider named and what they said about them, including anything they noted and are not acting on, so nothing looks skipped over.
+4. What is changing, stated plainly, and when it takes effect.
+5. What the patient needs to do, and by when.
+6. What happens next: the next draw, recheck or follow-up and its timing, and anything the team is arranging for them.
+7. How to ask a question, always, in these words or very close to them: "If you have any questions about this lab review, just reply to this message, or send us a message through Profile → Messages on the website."
+8. A short thank-you to close — thanking them for their time, or for trusting the practice with their care. One sentence. Nothing after it: no name, no title, no "Sincerely"; the practice's signature is added when it is sent.
+
+VOICE AND SHAPE:
+- Address the patient directly, in the second person. Friendly and professional: the way a care team member who knows their job writes to someone they respect. Plain and human, never stiff, never chummy, no sales cheer.
+- Warm, respectful, and complete: explain fully rather than tersely. A patient reading this should not have to write back to find out what happened or what to do.
+- Thorough means every part of what the provider recorded is explained to a patient who has not seen it. It does not mean adding anything they did not record.
+- This is the care team speaking to the patient, not the chart note re-voiced. Say "your provider lowered your dose because your hematocrit came up" — not "the rising hematocrit was attributed to supratherapeutic testosterone". Clinical phrasing in front of you is the same information written for a different reader; carry the information, not the phrasing.
+- Plain language. Write an abbreviation out in full — "hematocrit" for "hct" — but do not substitute a different term for one the provider used, and do not explain what a value means beyond what they said about it.
+- The greeting, two to four short paragraphs, then the closing lines. Sentences, not bullets.
+
+NEVER:
+- Give a diagnosis, an interpretation, a reassurance or a risk the provider did not state. "Everything else looks great" is a clinical claim unless they made it.
+- Answer a clinical question of your own accord or invite one you cannot answer. If something is beyond what the provider recorded, say their provider can address it.
+- Quote an internal handoff at the patient. Something handed to the team becomes what the patient will experience — "we will update your next shipment" — not an instruction addressed to staff.
+- Mention a value, medication or interval the provider did not record.`,
+
+  csInstructions: `You are writing the INSTRUCTIONS FOR CUSTOMER SERVICE field of a lab review: what a non-clinical teammate has to do because of this review.
+
+- Written to a co-worker, not to the patient. Direct, no pleasantries, no greeting and no sign-off.
+- Lead each item with the action: what to arrange, update, order, relay or ask.
+- The reader is not a clinician. Never give a clinical rationale, and never write anything that reads as prescribing.
+- One task per sentence, on its own line. Five at most.`,
+}
+
+export function systemPromptForField(field: ReviewField): string {
+  return `${SHARED_RULES}\n\n${FIELD_BRIEFS[field]}\n\n${FIELD_FIDELITY}`
+}
+
+export type FieldDraftRequest = {
+  field: ReviewField
+  /** What is already in the field. Kept, not replaced. */
+  existing: string
+  /** The provider's steer, typed in the modal. */
+  instructions: string
+  /** The decisions recorded elsewhere in this review — `describeDecision`. */
+  recorded: string
+  /** What to call the patient. Given only for a field written to them, so a
+   *  field that should say "the patient" has no name available to slip in. */
+  firstName?: string
+}
+
+/**
+ * Build the user turn for a field draft.
+ *
+ * Each input is labelled separately rather than concatenated, because they are
+ * trusted differently: the steer is an instruction, the existing text is
+ * protected, the name is a fact about the reader rather than about their care,
+ * and what the recorded decisions are *for* depends on the field — see
+ * `RECORDED_USE`.
+ */
+export function userPromptForField({
+  field,
+  existing,
+  instructions,
+  recorded,
+  firstName,
+}: FieldDraftRequest): string {
+  const parts: string[] = []
+  const label = FIELD_LABELS[field]
+
+  if (firstName?.trim()) {
+    parts.push(
+      `# Who you are writing to\n${firstName.trim()}. Address them by this name and use no ` +
+        `other name. It is the only thing you know about them that the provider did not write.`
+    )
+  }
+
+  if (recorded.trim()) {
+    parts.push(
+      `# What the provider has already recorded in this review\n${recorded.trim()}\n\n` +
+        `These are the provider's own entries. Stay consistent with them, and treat them as ` +
+        `available facts — ` +
+        (RECORDED_USE[field] === 'relay'
+          ? `and as the substance of this field. Relaying them to their reader is the job here, ` +
+            `so write them out even if the provider did not repeat them in their direction to you.`
+          : `but do not restate them in this field unless the provider asked you to.`)
+    )
+  }
+
+  if (instructions.trim()) {
+    parts.push(`# What the provider told you to write\n${instructions.trim()}`)
+  }
+
+  if (existing.trim()) {
+    parts.push(
+      `# What is already in this field\n${existing.trim()}\n\n` +
+        `Keep everything this says. You may tidy the sentence structure and finish an unfinished ` +
+        `thought, but do not drop, soften, strengthen or contradict any of it.`
+    )
+  }
+
+  if (!recorded.trim() && !instructions.trim() && !existing.trim()) {
+    // Reachable only by a caller that skipped the button's own guard. Better a
+    // blank response the provider can see than a field invented from nothing.
+    return 'Nothing has been recorded in this review and no direction was given. There is nothing to write. Reply with an empty response.'
+  }
+
+  parts.push(`Write the ${label} field. Return only its text, with nothing before or after it.`)
+
+  return parts.join('\n\n')
 }

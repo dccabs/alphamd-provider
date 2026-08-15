@@ -4,13 +4,26 @@ import OpenAI from 'openai'
 
 import { createAdminClient } from '@/lib/supabase/admin'
 import { fetchPatientContext, formatPatientContext } from './patientContext.ts'
-import { systemPromptFor, userPromptFor } from './prompts.ts'
+import {
+  systemPromptFor,
+  systemPromptForField,
+  userPromptFor,
+  userPromptForField,
+} from './prompts.ts'
+import type { ReviewField } from './reviewFields.ts'
 import type { AiTask } from './tasks.ts'
 import type { ReplyIdentity } from '@/lib/labReviews/replyIdentity'
 
 /**
  * The assistant's server half: resolve the patient from the review, assemble
  * context, and stream plain text back.
+ *
+ * Two entry points, and the difference between them is the point. `streamDraft`
+ * writes from the patient's history. `streamFieldDraft` writes out what the
+ * provider already said and **reads nothing at all** — no patient, no labs, no
+ * messages, not even the review row. That is not an optimisation: a field draft
+ * promises the provider that every fact in it is one of theirs, and the only way
+ * to keep that promise is to have nothing else on hand to leak into it.
  *
  * Model and token budget match the main app's `ai-reply-assistant` so the two
  * behave alike and cost the same per draft.
@@ -70,6 +83,64 @@ export async function streamDraft(input: DraftInput): Promise<DraftStream> {
 
   const context = await fetchPatientContext(subject.patientId, subject.reportId)
 
+  return streamCompletion({
+    system: systemPromptFor(input.task, input.identity),
+    user: userPromptFor({
+      task: input.task,
+      existing: input.existing,
+      instructions: input.instructions,
+      context: formatPatientContext(context),
+    }),
+  })
+}
+
+export type FieldDraftInput = {
+  field: ReviewField
+  /** What is already in the field. */
+  existing: string
+  /** The provider's steer, typed in the assist modal. */
+  instructions: string
+  /** `describeDecision` output — the provider's other entries in this review. */
+  recorded: string
+  /** What to call the patient, for a field they read. Empty for the rest. */
+  firstName: string
+}
+
+/**
+ * Draft one field of a review from the provider's own words.
+ *
+ * Takes no review id, because there is nothing to look up: everything the model
+ * is allowed to know arrives in the request, having been read off the flyout the
+ * provider is asking from. Access is still checked by the route — this is a
+ * staff-only tool — but no patient record is touched. The first name is the one
+ * thing here that is not the provider's own prose, and it goes no further than
+ * the salutation of a message they are about to read and approve.
+ */
+export async function streamFieldDraft(input: FieldDraftInput): Promise<DraftStream> {
+  if (!aiConfigured()) {
+    return { ok: false, error: 'The AI assistant is not configured in this environment.' }
+  }
+
+  return streamCompletion({
+    system: systemPromptForField(input.field),
+    user: userPromptForField({
+      field: input.field,
+      existing: input.existing,
+      instructions: input.instructions,
+      recorded: input.recorded,
+      firstName: input.firstName,
+    }),
+  })
+}
+
+/** The one place either kind of draft reaches OpenAI. */
+async function streamCompletion({
+  system,
+  user,
+}: {
+  system: string
+  user: string
+}): Promise<DraftStream> {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
 
   let completion
@@ -77,16 +148,8 @@ export async function streamDraft(input: DraftInput): Promise<DraftStream> {
     completion = await openai.chat.completions.create({
       model: MODEL,
       messages: [
-        { role: 'system', content: systemPromptFor(input.task, input.identity) },
-        {
-          role: 'user',
-          content: userPromptFor({
-            task: input.task,
-            existing: input.existing,
-            instructions: input.instructions,
-            context: formatPatientContext(context),
-          }),
-        },
+        { role: 'system', content: system },
+        { role: 'user', content: user },
       ],
       max_completion_tokens: MAX_TOKENS,
       stream: true,

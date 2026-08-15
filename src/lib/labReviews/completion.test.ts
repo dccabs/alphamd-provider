@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { FLAG, PATIENT_STATUS } from './clinicalIds.ts'
-import { planCompletion, validateCompletion } from './completion.ts'
+import { FLAG, FLAG_LABELS, PATIENT_STATUS, PATIENT_STATUS_LABELS } from './clinicalIds.ts'
+import { planCompletion, reviewAudiences, validateCompletion } from './completion.ts'
 import {
   DISPOSITIONS,
   EMPTY_DRAFT,
@@ -138,11 +138,22 @@ test('a follow-up must say what it needs', () => {
   ])
 })
 
-test('ticking patient instructions requires the instructions', () => {
+test('ticking a specific patient message requires that message', () => {
   const problems = validateCompletion(
     draft({ disposition: 'follow_up_needed', followUpKinds: ['patient_instructions'] })
   )
-  assert.deepEqual(problems, ['Enter the instructions for the patient.'])
+  assert.deepEqual(problems, ['Write the message for the patient.'])
+
+  assert.deepEqual(
+    validateCompletion(
+      draft({
+        disposition: 'follow_up_needed',
+        followUpKinds: ['patient_instructions'],
+        patientMessage: 'Your next draw is in 8 weeks.',
+      })
+    ),
+    []
+  )
 })
 
 test('ticking add-a-medication requires a named medication', () => {
@@ -243,7 +254,6 @@ test('the note carries every filled section, and no empty ones', () => {
         med({ name: 'Vitamin D' }),
         med({ name: '  ', dose: 'ignored' }),
       ],
-      concerns: 'Hct trending up',
       providerNote: 'Spoke with the patient.',
     }),
     'Dr Smith'
@@ -252,10 +262,27 @@ test('the note carries every filled section, and no empty ones', () => {
   assert.match(plan.note, /Follow-up needed: Needs more labs, Add a new medication/)
   assert.match(plan.note, /New medication: Anastrozole — 0\.5 mg\./)
   assert.match(plan.note, /New medication: Vitamin D\./)
-  assert.match(plan.note, /Areas of concern: Hct trending up/)
   assert.match(plan.note, /Spoke with the patient\./)
-  assert.doesNotMatch(plan.note, /Patient instructions:/)
+  assert.doesNotMatch(plan.note, /Message for the patient:/)
   assert.doesNotMatch(plan.note, /ignored/)
+})
+
+test('what the patient was told goes on the chart', () => {
+  // The record has to show the result was communicated, not only that it was
+  // read: an abnormal value nobody told the patient about is the claim.
+  const plan = planCompletion(
+    draft({
+      disposition: 'dose_change',
+      doseChanges: [testosterone],
+      patientMessage: 'Your hematocrit is up, so we are lowering your dose.',
+    }),
+    'Dr Smith'
+  )
+
+  assert.match(
+    plan.note,
+    /Message for the patient: Your hematocrit is up, so we are lowering your dose\./
+  )
 })
 
 test('an added medication carries its level and the instruction it works out to', () => {
@@ -582,11 +609,88 @@ test('the detail keeps the prescription behind each dose change', () => {
 test('the structured detail keeps blanks as null rather than empty strings', () => {
   const plan = planCompletion(draft({ disposition: 'continue_protocol' }), 'Dr Smith')
   assert.deepEqual(plan.detail.doseChanges, [])
-  assert.equal(plan.detail.concerns, null)
+  assert.equal(plan.detail.patientMessage, null)
+  assert.equal(plan.detail.csInstructions, null)
   assert.deepEqual(plan.detail.newMedications, [])
   assert.equal(plan.detail.disposition, 'continue_protocol')
 })
 
 test('planning without a disposition throws rather than writing a half-record', () => {
   assert.throws(() => planCompletion(draft(), 'Dr Smith'), /validate first/)
+})
+
+/** Everything filled in, for the summary a provider approves. */
+const full = draft({
+  disposition: 'dose_change',
+  doseChanges: [testosterone],
+  newMedications: [med({ medicationId: 13, name: 'Anastrozole', dose: '0.5mg twice weekly' })],
+  patientMessage: 'Hi Marcus,\n\nYour provider raised your dose.',
+  csInstructions: 'Book the 8 week draw.',
+  providerNote: 'Raised testosterone for symptom control.',
+})
+
+test('the patient sees exactly what was written for them', () => {
+  const audiences = reviewAudiences(full, 'Dr Smith')
+  assert.equal(audiences.patient, 'Hi Marcus,\n\nYour provider raised your dose.')
+})
+
+test('the customer service text is the same text the note carries', () => {
+  // The whole point of composing this once. If the summary and the chart could
+  // disagree, the thing they disagreed about would be a prescription.
+  const audiences = reviewAudiences(full, 'Dr Smith')
+  const note = planCompletion(full, 'Dr Smith').note
+
+  assert.ok(audiences.customerService.length > 0)
+  assert.ok(note.includes(`For customer service: ${audiences.customerService}`))
+})
+
+test('customer service is handed the changes before the provider’s own hand-off', () => {
+  const audiences = reviewAudiences(full, 'Dr Smith')
+  assert.deepEqual(audiences.customerService.split('\n'), [
+    'Dose change — Testosterone cypionate: 140mg/week → 160mg/week. New sig: Inject .4mL subcutaneously every 3.5 days. Update the prescription and the next shipment.',
+    'New medication — Anastrozole: 0.5mg twice weekly. Add it to the prescription and the next shipment.',
+    'Book the 8 week draw.',
+  ])
+})
+
+test('the chart text is the note, character for character', () => {
+  assert.equal(reviewAudiences(full, 'Dr Smith').chart, planCompletion(full, 'Dr Smith').note)
+})
+
+test('the provider’s name reaches the summary, since the note opens with it', () => {
+  assert.match(reviewAudiences(full, 'Dr Jane Smith').chart, /completed by Dr Jane Smith\./)
+})
+
+test('a review with nothing written leaves two of the three empty', () => {
+  const audiences = reviewAudiences(draft({ disposition: 'continue_protocol' }), 'Dr Smith')
+  assert.equal(audiences.patient, '')
+  assert.equal(audiences.customerService, '')
+  assert.match(audiences.chart, /Disposition: Continue protocol as designed\./)
+})
+
+test('every flag and status a completion can touch has a label to show', () => {
+  // The confirmation screen names these. An id with no label would appear there
+  // as a bare number, or as nothing at all.
+  for (const disposition of DISPOSITIONS) {
+    const plan = planCompletion(
+      draft({ disposition, doseChanges: [testosterone], followUpKinds: ['more_labs'] }),
+      'Dr Smith'
+    )
+
+    for (const id of [...plan.addFlagIds, ...plan.removeFlagIds]) {
+      assert.ok(FLAG_LABELS[id], `flag ${id} (${disposition})`)
+    }
+    if (plan.patientStatusId !== null) {
+      assert.ok(PATIENT_STATUS_LABELS[plan.patientStatusId], `status ${plan.patientStatusId}`)
+    }
+  }
+})
+
+test('a dose change alone still gives customer service something to do', () => {
+  // Nothing was typed for them, but a prescription has to be updated.
+  const audiences = reviewAudiences(
+    draft({ disposition: 'dose_change', doseChanges: [testosterone] }),
+    'Dr Smith'
+  )
+  assert.match(audiences.customerService, /Update the prescription and the next shipment\./)
 })

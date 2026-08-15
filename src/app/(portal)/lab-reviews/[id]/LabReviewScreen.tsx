@@ -60,6 +60,8 @@ import type {
 export type PatientHeader = {
   patientId: string
   name: string
+  /** What the patient is called, which is what a message to them opens with. */
+  firstName: string | null
   status: string | null
   statusId: number | null
   age: number | null
@@ -121,6 +123,7 @@ export function LabReviewScreen({
   queuePosition: number | null
   queueTotal: number
   viewerId: string
+  /** The signed-in provider, by the name that will be written onto the chart. */
   viewerName: string
   providers: ProviderOption[]
   /** Signing providers for a requisition — `lab_providers`, which is a different
@@ -582,6 +585,8 @@ export function LabReviewScreen({
         <ReviewModal
           reviewId={reviewId}
           patientName={header.name}
+          patientFirstName={header.firstName}
+          providerName={viewerName}
           patientStatus={header.status}
           collectionDate={collectionDate}
           medications={medications}

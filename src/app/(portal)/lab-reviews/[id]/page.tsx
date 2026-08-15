@@ -10,7 +10,7 @@ import {
   getPatientHeader,
   listProviders,
 } from '@/lib/labReviews/queries'
-import { listLabReviewEvents, listLabReviewNotes } from '@/lib/labReviews/events'
+import { listLabReviewEvents, listLabReviewNotes, resolveActor } from '@/lib/labReviews/events'
 import { listLabProviders, listScheduledLabOrders } from '@/lib/labOrders/queries'
 import {
   getConsultations,
@@ -60,6 +60,10 @@ export default async function LabReviewDetailPage({
     scheduledLabs,
     catalog,
     dosageOptions,
+    // The same name `completeLabReview` will write onto the chart note, resolved
+    // here so the confirmation screen can show that note as it will actually
+    // read. Falls back to the email exactly as the write path does.
+    actor,
   ] = await Promise.all([
     getPatientHeader(review.patientId),
     getNotes(review.patientId),
@@ -75,6 +79,7 @@ export default async function LabReviewDetailPage({
     listScheduledLabOrders(review.patientId),
     getMedicationCatalog(),
     getDosageOptions(),
+    resolveActor(access.access),
   ])
 
   if (!header) notFound()
@@ -102,7 +107,7 @@ export default async function LabReviewDetailPage({
       queuePosition={review.queuePosition}
       queueTotal={review.queueTotal}
       viewerId={access.access.userId}
-      viewerName={access.access.email}
+      viewerName={actor.displayName}
       providers={providers}
       labProviders={labProviders}
       scheduledLabs={scheduledLabs}

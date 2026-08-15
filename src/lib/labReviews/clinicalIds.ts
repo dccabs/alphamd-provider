@@ -28,6 +28,30 @@ export const PATIENT_STATUS = {
 } as const
 
 /**
+ * The same labels, for showing a provider what finishing a review will do.
+ *
+ * Copied from `user_flags.flag_name` and `user_statuses.status` as they read in
+ * production rather than fetched, because this is used in a confirmation screen
+ * where a round trip per flag would be absurd. A renamed row would leave this
+ * stale, which is the trade: the id is what gets written either way, and only the
+ * word on the confirmation would be out of date.
+ *
+ * Keyed loosely by number so a caller can look up whatever `planCompletion` put
+ * in `addFlagIds`, and undefined for anything not listed rather than a wrong
+ * label.
+ */
+export const FLAG_LABELS: Record<number, string> = {
+  [FLAG.followUpRequired]: 'Follow Up Required',
+  [FLAG.needsLabReview]: 'Needs lab review',
+  [FLAG.labsReviewedNoChanges]: 'Labs reviewed, no changes recommended',
+}
+
+export const PATIENT_STATUS_LABELS: Record<number, string> = {
+  [PATIENT_STATUS.pricingSentToPatient]: 'Non-Patient - Pricing sent to PT',
+  [PATIENT_STATUS.treatmentNotRecommended]: 'Non-Patient - Treatment NOT Recommended',
+}
+
+/**
  * `medications_list` rows this app has to reason about by identity rather than by
  * name.
  *
