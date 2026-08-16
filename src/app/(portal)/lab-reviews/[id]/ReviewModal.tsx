@@ -11,26 +11,27 @@ import {
   DialogDescription,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { DictationTextarea } from '@/components/ui/dictation-textarea'
 import { Label } from '@/components/ui/label'
-import { Textarea } from '@/components/ui/textarea'
 import { validateCompletion } from '@/lib/labReviews/completion'
+import type { Consultation } from '@/lib/labReviews/consultations'
 import { shortTime } from '@/lib/labReviews/format'
 import {
   DISPOSITION_HINTS,
   DISPOSITION_LABELS,
-  FOLLOW_UP_KINDS,
-  FOLLOW_UP_LABELS,
   dispositionsFor,
   isDraftEmpty,
   type Disposition,
-  type FollowUpKind,
   type ReviewDraft,
 } from '@/lib/labReviews/reviewDraft'
+import type { LabProviderOption, ScheduledLabOrder } from '@/lib/labOrders/queries'
 import { describeDecision } from '@/lib/ai/decision'
 import { completeLabReviewAction, saveReviewDraftAction } from '../actions'
+import { ConsultPanel } from './ConsultPanel'
 import { DoseChangePanel } from './DoseChangePanel'
 import { FieldAssistButton } from './FieldAssistButton'
 import { FinalizeSummaryDialog } from './FinalizeSummaryDialog'
+import { LabOrdersPanel } from './LabOrdersPanel'
 import { NewMedicationPanel } from './NewMedicationPanel'
 import type { CatalogMedication, DosageOption, Medication } from './types'
 
@@ -77,10 +78,19 @@ export function ReviewModal({
   patientFirstName,
   providerName,
   patientStatus,
+  patientStatusId,
+  patientState,
+  patientEmail,
+  patientGender,
   collectionDate,
   medications,
   catalog,
   dosageOptions,
+  labProviders,
+  scheduledLabs,
+  consultations,
+  cancellingLabOrder,
+  onCancelScheduledLab,
   initialDraft,
   draftUpdatedAt,
   onClose,
@@ -94,6 +104,15 @@ export function ReviewModal({
    *  summary so the note is previewed exactly as it will be written. */
   providerName: string
   patientStatus: string | null
+  /** `user_list.status`, which decides which consultation types are suggested.
+   *  The label above decides which dispositions are offered; this is the id
+   *  behind it, and the two lists key on different things. */
+  patientStatusId: number | null
+  /** `user_list.state`, for the comped-labs restriction in NY and NJ. */
+  patientState: string | null
+  /** Where a booking link would be sent, which is what makes one possible. */
+  patientEmail: string | null
+  patientGender: string | null
   collectionDate: string | null
   /** The patient's prescriptions, which are what a dose change picks from. */
   medications: Medication[]
@@ -101,6 +120,16 @@ export function ReviewModal({
   catalog: CatalogMedication[]
   /** Every dose in the catalog, for both a dose change and a new medication. */
   dosageOptions: DosageOption[]
+  /** Signing providers for a requisition — `lab_providers`. */
+  labProviders: LabProviderOption[]
+  /** What the patient already has on order, so a redraw is not ordered twice. */
+  scheduledLabs: ScheduledLabOrder[]
+  /** What the patient has already booked, so they are not asked twice. */
+  consultations: Consultation[]
+  cancellingLabOrder: boolean
+  /** Cancelling an already-placed order happens immediately, unlike the orders
+   *  composed here: the main app's cron may act on that row within minutes. */
+  onCancelScheduledLab: (scheduledId: string) => void
   initialDraft: ReviewDraft
   draftUpdatedAt: string | null
   onClose: () => void
@@ -196,7 +225,6 @@ export function ReviewModal({
   }
 
   const options = dispositionsFor(patientStatus)
-  const followUp = draft.disposition === 'follow_up_needed'
   const showDose = draft.disposition === 'dose_change'
   const showDoseChanges = showDose || draft.doseChanges.length > 0
 
@@ -207,13 +235,6 @@ export function ReviewModal({
   // insists they be removed.
   const continuing = draft.disposition === 'continue_protocol'
   const showNewMeds = !continuing || draft.newMedications.length > 0
-
-  const toggleFollowUp = (kind: FollowUpKind) =>
-    update({
-      followUpKinds: draft.followUpKinds.includes(kind)
-        ? draft.followUpKinds.filter((k) => k !== kind)
-        : [...draft.followUpKinds, kind],
-    })
 
   return (
     // Base UI's Dialog as a right-hand sheet, which is what gives Escape to
@@ -283,30 +304,6 @@ export function ReviewModal({
             </div>
           </fieldset>
 
-          {followUp && (
-            <fieldset className="flex flex-col gap-2">
-              <legend className="text-xs font-bold tracking-wider text-muted-foreground">
-                WHAT THE FOLLOW-UP NEEDS
-              </legend>
-              <div className="flex flex-col gap-1.5">
-                {FOLLOW_UP_KINDS.map((kind) => (
-                  <label
-                    key={kind}
-                    className="flex cursor-pointer items-center gap-2.5 rounded-lg border px-3 py-2 text-[13px]"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={draft.followUpKinds.includes(kind)}
-                      onChange={() => toggleFollowUp(kind)}
-                      className="size-3.5 accent-green-600"
-                    />
-                    {FOLLOW_UP_LABELS[kind]}
-                  </label>
-                ))}
-              </div>
-            </fieldset>
-          )}
-
           {/* Stays on screen under another disposition while changes are still
               recorded, because completion refuses them there and this is the only
               place they can be removed. */}
@@ -335,6 +332,31 @@ export function ReviewModal({
             />
           )}
 
+          {/* Under every disposition, including "continue protocol": labs on an
+              interval are how continuing as designed gets checked. */}
+          <LabOrdersPanel
+            patientState={patientState}
+            providers={labProviders}
+            scheduled={scheduledLabs}
+            orders={draft.labOrders}
+            cancelling={cancellingLabOrder}
+            onCancelScheduled={onCancelScheduledLab}
+            onChange={(labOrders) => update({ labOrders })}
+          />
+
+          {/* Also under every disposition, and next to the labs because the two
+              are the same kind of decision: something the patient has to do,
+              which the review sends them when it is approved. */}
+          <ConsultPanel
+            reviewId={reviewId}
+            patientEmail={patientEmail}
+            patientStatusId={patientStatusId}
+            patientGender={patientGender}
+            consultations={consultations}
+            request={draft.consultation}
+            onChange={(consultation) => update({ consultation })}
+          />
+
           {/* The chart note comes first because the other two are written from it:
               once the assessment exists, the patient message and the customer
               service hand-off have something to relay. */}
@@ -358,12 +380,12 @@ export function ReviewModal({
                 disabled={finalizing}
               />
             </div>
-            <Textarea
+            <DictationTextarea
               id="provider-note"
               rows={4}
               placeholder="What you reviewed, what it showed, your assessment and the plan…"
               value={draft.providerNote}
-              onChange={(e) => update({ providerNote: e.target.value })}
+              onValueChange={(providerNote) => update({ providerNote })}
             />
           </div>
 
@@ -392,12 +414,12 @@ export function ReviewModal({
                 disabled={finalizing}
               />
             </div>
-            <Textarea
+            <DictationTextarea
               id="patient-message"
               rows={4}
               placeholder="What the patient is told — the result, what is changing, what they do next…"
               value={draft.patientMessage}
-              onChange={(e) => update({ patientMessage: e.target.value })}
+              onValueChange={(patientMessage) => update({ patientMessage })}
             />
           </div>
 
@@ -417,12 +439,12 @@ export function ReviewModal({
                 disabled={finalizing}
               />
             </div>
-            <Textarea
+            <DictationTextarea
               id="cs-instructions"
               rows={3}
               placeholder="What CS should relay or handle (shipment changes, scheduling, patient outreach)…"
               value={draft.csInstructions}
-              onChange={(e) => update({ csInstructions: e.target.value })}
+              onValueChange={(csInstructions) => update({ csInstructions })}
             />
           </div>
         </div>
@@ -455,6 +477,7 @@ export function ReviewModal({
           <FinalizeSummaryDialog
             draft={draft}
             patientName={patientName}
+            patientEmail={patientEmail}
             providerName={providerName}
             onEdit={() => setSummary(false)}
             onApprove={APPROVAL_FINISHES ? finalize : null}

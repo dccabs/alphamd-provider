@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
+import type { ConsultRequest } from '../consultations/request.ts'
+import { EMPTY_ORDER, type LabOrder } from '../labOrders/order.ts'
 import { FLAG, FLAG_LABELS, PATIENT_STATUS, PATIENT_STATUS_LABELS } from './clinicalIds.ts'
 import { planCompletion, reviewAudiences, validateCompletion } from './completion.ts'
 import {
@@ -12,6 +14,28 @@ import {
 } from './reviewDraft.ts'
 
 const draft = (patch: Partial<ReviewDraft> = {}): ReviewDraft => ({ ...EMPTY_DRAFT, ...patch })
+
+/** A complete order, dated now so every assertion about it is deterministic. */
+const labs = (patch: Partial<LabOrder> = {}): LabOrder => ({
+  ...EMPTY_ORDER,
+  providerId: 'provider-uuid',
+  testCodes: ['cbc_85025'],
+  diagnosisCodes: ['E29.1'],
+  ...patch,
+})
+
+/** A real Calendly event type, so `consultLine` resolves it. */
+const FOLLOW_UP = '2d7a15dd-4c53-479b-b8ff-d26c508f4995'
+
+const BOOKING_URL = 'https://calendly.com/d/abc-def-ghi'
+
+const consult = (patch: Partial<ConsultRequest> = {}): ConsultRequest => ({
+  eventTypeId: FOLLOW_UP,
+  message: '',
+  bookingUrl: BOOKING_URL,
+  expiresAt: null,
+  ...patch,
+})
 
 const med = (patch: Partial<DraftMedication> = {}): DraftMedication => ({
   medicationId: null,
@@ -113,7 +137,7 @@ test('a dose change under another disposition stops the review being finished', 
   // quietly dropped from the note.
   for (const disposition of ['continue_protocol', 'follow_up_needed'] as const) {
     const problems = validateCompletion(
-      draft({ disposition, followUpKinds: ['more_labs'], doseChanges: [testosterone] })
+      draft({ disposition, labOrders: [labs()], doseChanges: [testosterone] })
     )
     assert.deepEqual(
       problems,
@@ -132,63 +156,103 @@ test('a half-recorded change left under another disposition holds nothing up', (
   )
 })
 
-test('a follow-up must say what it needs', () => {
-  assert.deepEqual(validateCompletion(draft({ disposition: 'follow_up_needed' })), [
-    'Say what the follow-up needs.',
-  ])
+test('a follow-up with nothing recorded cannot be finished', () => {
+  const problems = validateCompletion(draft({ disposition: 'follow_up_needed' }))
+  assert.equal(problems.length, 1)
+  assert.match(problems[0], /Say what the follow-up is/)
 })
 
-test('ticking a specific patient message requires that message', () => {
-  const problems = validateCompletion(
-    draft({ disposition: 'follow_up_needed', followUpKinds: ['patient_instructions'] })
-  )
-  assert.deepEqual(problems, ['Write the message for the patient.'])
+test('any one recorded thing is enough of a follow-up', () => {
+  // The checkbox group this replaces asked the provider to declare what the
+  // follow-up needed, next to the panels where they do it. Checking the recorded
+  // thing instead means the two can no longer disagree.
+  const each: Partial<ReviewDraft>[] = [
+    { patientMessage: 'Your next draw is in 8 weeks.' },
+    { csInstructions: 'Book the draw.' },
+    { labOrders: [labs()] },
+    { consultation: consult() },
+    { newMedications: [med({ medicationId: 13, name: 'Anastrozole' })] },
+  ]
 
-  assert.deepEqual(
-    validateCompletion(
-      draft({
-        disposition: 'follow_up_needed',
-        followUpKinds: ['patient_instructions'],
-        patientMessage: 'Your next draw is in 8 weeks.',
-      })
-    ),
-    []
-  )
+  for (const patch of each) {
+    assert.deepEqual(
+      validateCompletion(draft({ disposition: 'follow_up_needed', ...patch })),
+      [],
+      JSON.stringify(patch)
+    )
+  }
 })
 
-test('ticking add-a-medication requires a named medication', () => {
+test('an unnamed medication is not a follow-up on its own', () => {
   const problems = validateCompletion(
-    draft({
-      disposition: 'follow_up_needed',
-      followUpKinds: ['new_medication'],
-      newMedications: [med({ name: '  ', dose: '5 mg' })],
-    })
+    draft({ disposition: 'follow_up_needed', newMedications: [med({ name: '  ', dose: '5 mg' })] })
   )
   assert.equal(problems.length, 1)
-
-  assert.deepEqual(
-    validateCompletion(
-      draft({
-        disposition: 'follow_up_needed',
-        followUpKinds: ['new_medication'],
-        newMedications: [med({ medicationId: 13, name: 'Anastrozole' })],
-      })
-    ),
-    []
-  )
 })
 
-test('more-labs alone is a complete follow-up', () => {
-  assert.deepEqual(
-    validateCompletion(draft({ disposition: 'follow_up_needed', followUpKinds: ['more_labs'] })),
-    []
+test('a lab order missing what a requisition needs is named rather than placed', () => {
+  // Only reachable from a draft saved by an older build: the dialog will not
+  // attach one. A requisition with no tests on it would be sent and be useless.
+  const problems = validateCompletion(
+    draft({
+      disposition: 'continue_protocol',
+      labOrders: [labs(), labs({ testCodes: [], providerId: '' })],
+    })
   )
+
+  assert.equal(problems.length, 2)
+  assert.ok(problems.every((p) => p.startsWith('Lab order 2:')))
+})
+
+test('a consultation type that no longer exists is named rather than invited to', () => {
+  // Only reachable from a draft saved before the type was retired. Sending a link
+  // for it would mint one Calendly cannot honour.
+  const problems = validateCompletion(
+    draft({ disposition: 'continue_protocol', consultation: consult({ eventTypeId: 'gone' }) })
+  )
+
+  assert.equal(problems.length, 1)
+  assert.match(problems[0], /no longer offered/)
+})
+
+test('a consultation can be requested under any disposition', () => {
+  for (const disposition of DISPOSITIONS) {
+    assert.deepEqual(
+      validateCompletion(
+        draft({
+          disposition,
+          doseChanges: disposition === 'dose_change' ? [testosterone] : [],
+          consultation: consult(),
+        })
+      ),
+      [],
+      disposition
+    )
+  }
+})
+
+test('labs can be ordered under any disposition', () => {
+  // Continuing a protocol as designed still means labs on an interval, and that
+  // is the disposition most reviews land on.
+  for (const disposition of DISPOSITIONS) {
+    assert.deepEqual(
+      validateCompletion(
+        draft({
+          disposition,
+          doseChanges: disposition === 'dose_change' ? [testosterone] : [],
+          labOrders: [labs({ timing: 'in_12_weeks' })],
+        })
+      ),
+      [],
+      disposition
+    )
+  }
 })
 
 test('every disposition clears the "Needs lab review" flag', () => {
   for (const disposition of DISPOSITIONS) {
     const plan = planCompletion(
-      draft({ disposition, doseChanges: [testosterone], followUpKinds: ['more_labs'] }),
+      draft({ disposition, doseChanges: [testosterone], labOrders: [labs()] }),
       'Dr Smith'
     )
     assert.deepEqual(plan.removeFlagIds, [FLAG.needsLabReview], disposition)
@@ -198,7 +262,7 @@ test('every disposition clears the "Needs lab review" flag', () => {
 test('only continue-protocol claims no changes were recommended', () => {
   for (const disposition of DISPOSITIONS) {
     const plan = planCompletion(
-      draft({ disposition, doseChanges: [testosterone], followUpKinds: ['more_labs'] }),
+      draft({ disposition, doseChanges: [testosterone], labOrders: [labs()] }),
       'Dr Smith'
     )
     assert.equal(
@@ -212,7 +276,7 @@ test('only continue-protocol claims no changes were recommended', () => {
 test('dispositions that need downstream work raise the follow-up flag', () => {
   for (const disposition of ['dose_change', 'follow_up_needed', 'treatment_recommended'] as const) {
     const plan = planCompletion(
-      draft({ disposition, doseChanges: [testosterone], followUpKinds: ['more_labs'] }),
+      draft({ disposition, doseChanges: [testosterone], labOrders: [labs()] }),
       'Dr Smith'
     )
     assert.ok(plan.addFlagIds.includes(FLAG.followUpRequired), disposition)
@@ -248,7 +312,6 @@ test('the note carries every filled section, and no empty ones', () => {
   const plan = planCompletion(
     draft({
       disposition: 'follow_up_needed',
-      followUpKinds: ['more_labs', 'new_medication'],
       newMedications: [
         med({ medicationId: 13, name: 'Anastrozole', dose: '0.5 mg' }),
         med({ name: 'Vitamin D' }),
@@ -259,7 +322,6 @@ test('the note carries every filled section, and no empty ones', () => {
     'Dr Smith'
   )
 
-  assert.match(plan.note, /Follow-up needed: Needs more labs, Add a new medication/)
   assert.match(plan.note, /New medication: Anastrozole — 0\.5 mg\./)
   assert.match(plan.note, /New medication: Vitamin D\./)
   assert.match(plan.note, /Spoke with the patient\./)
@@ -289,7 +351,6 @@ test('an added medication carries its level and the instruction it works out to'
   const plan = planCompletion(
     draft({
       disposition: 'follow_up_needed',
-      followUpKinds: ['new_medication'],
       newMedications: [
         med({
           medicationId: 1,
@@ -339,7 +400,6 @@ test('a catalog dose that is already a sentence is not punctuated twice', () => 
   const plan = planCompletion(
     draft({
       disposition: 'follow_up_needed',
-      followUpKinds: ['new_medication'],
       newMedications: [
         med({ medicationId: 15, name: 'Tadalafil', dose: 'Take 1 tablet by mouth daily.' }),
       ],
@@ -354,7 +414,6 @@ test('the detail keeps the catalog row and the sig behind each added medication'
   const plan = planCompletion(
     draft({
       disposition: 'follow_up_needed',
-      followUpKinds: ['new_medication'],
       newMedications: [
         med({
           medicationId: 1,
@@ -612,7 +671,125 @@ test('the structured detail keeps blanks as null rather than empty strings', () 
   assert.equal(plan.detail.patientMessage, null)
   assert.equal(plan.detail.csInstructions, null)
   assert.deepEqual(plan.detail.newMedications, [])
+  assert.deepEqual(plan.detail.labOrders, [])
+  assert.equal(plan.detail.consultation, null)
   assert.equal(plan.detail.disposition, 'continue_protocol')
+})
+
+test('a requested consultation reaches the chart, the hand-off and the record', () => {
+  const plan = planCompletion(
+    draft({
+      disposition: 'follow_up_needed',
+      consultation: consult({ message: 'Want to talk through the hematocrit first.' }),
+    }),
+    'Dr Smith'
+  )
+
+  assert.match(
+    plan.note,
+    /Consultation requested: AlphaMD Provider, Secondary Follow-Up · 15 minutes/
+  )
+  // Customer service does not arrange it, but they are who the patient asks why
+  // a booking link arrived.
+  assert.match(plan.note, /For customer service: Consultation — the patient is emailed a booking link/)
+  assert.match(plan.note, /They book it themselves\./)
+  assert.deepEqual(plan.detail.consultation, {
+    eventTypeId: FOLLOW_UP,
+    eventTypeName: 'AlphaMD Provider, Secondary Follow-Up',
+    message: 'Want to talk through the hematocrit first.',
+  })
+})
+
+test('the recorded consultation resolves the Calendly id to a name', () => {
+  // The detail is read back by people, and a bare UUID tells them nothing about
+  // which appointment the patient was offered.
+  const plan = planCompletion(
+    draft({ disposition: 'continue_protocol', consultation: consult({ eventTypeId: 'gone' }) }),
+    'Dr Smith'
+  )
+  assert.equal(plan.detail.consultation?.eventTypeName, 'Unknown type')
+})
+
+test('a consultation names the review in the queue when nothing louder happened', () => {
+  assert.equal(
+    planCompletion(
+      draft({ disposition: 'follow_up_needed', consultation: consult() }),
+      'Dr Smith'
+    ).resolution,
+    'Follow-up needed: consultation — AlphaMD Provider, Secondary Follow-Up'
+  )
+})
+
+test('labs outrank a consultation in the resolution', () => {
+  // Both reach the patient, but the draw is the one they pay for and travel to.
+  assert.equal(
+    planCompletion(
+      draft({
+        disposition: 'follow_up_needed',
+        labOrders: [labs({ timing: 'custom', customDate: '2099-01-04' })],
+        consultation: consult(),
+      }),
+      'Dr Smith'
+    ).resolution,
+    'Follow-up needed: labs — Jan 4, 2099'
+  )
+})
+
+test('an ordered lab reaches the chart, the hand-off and the record', () => {
+  const order = labs({ testCodes: ['cbc_85025', 'cmp_80053'], requiredCodes: ['cbc_85025'] })
+  const plan = planCompletion(
+    draft({ disposition: 'continue_protocol', labOrders: [order] }),
+    'Dr Smith'
+  )
+
+  assert.match(plan.note, /Labs ordered: Now — CBC \(85025\), CMP \(80053\)/)
+  assert.match(plan.note, /For customer service: Labs ordered — Now — CBC \(85025\)/)
+  assert.match(plan.note, /nothing to do here unless they ask about it/)
+  // Kept whole, so a later reader can see what the review decided to send even
+  // if the requisition that went out disagrees.
+  assert.deepEqual(plan.detail.labOrders, [order])
+})
+
+test('two orders in one review each get their own line, and one explanation', () => {
+  // Labs now to confirm the change, and a redraw on the interval. One decision.
+  const plan = planCompletion(
+    draft({
+      disposition: 'follow_up_needed',
+      labOrders: [labs(), labs({ timing: 'custom', customDate: '2099-01-04' })],
+    }),
+    'Dr Smith'
+  )
+
+  assert.match(plan.note, /Labs ordered: Now — CBC \(85025\)/)
+  assert.match(plan.note, /Labs ordered: Jan 4, 2099 — CBC \(85025\)/)
+  assert.equal(plan.note.match(/nothing to do here unless they ask/g)?.length, 1)
+})
+
+test('the resolution leads with when labs are coming, not which tests', () => {
+  // A queue row has no room for fifteen test names, and the date is what a
+  // reader scanning the queue is after.
+  assert.equal(
+    planCompletion(
+      draft({
+        disposition: 'follow_up_needed',
+        labOrders: [labs({ timing: 'custom', customDate: '2099-01-04' })],
+      }),
+      'Dr Smith'
+    ).resolution,
+    'Follow-up needed: labs — Jan 4, 2099'
+  )
+})
+
+test('a dose change still outranks an order in the resolution', () => {
+  // Both can be true in one review. The new dose is the thing somebody has to
+  // act on today.
+  assert.equal(
+    planCompletion(
+      draft({ disposition: 'dose_change', doseChanges: [testosterone], labOrders: [labs()] }),
+      'Dr Smith'
+    ).resolution,
+    'Dose change: Testosterone cypionate — 160mg/week'
+  )
 })
 
 test('planning without a disposition throws rather than writing a half-record', () => {
@@ -632,6 +809,35 @@ const full = draft({
 test('the patient sees exactly what was written for them', () => {
   const audiences = reviewAudiences(full, 'Dr Smith')
   assert.equal(audiences.patient, 'Hi Marcus,\n\nYour provider raised your dose.')
+})
+
+test('a staged consultation tells the patient how to book, after the provider’s words', () => {
+  const audiences = reviewAudiences({ ...full, consultation: consult() }, 'Dr Smith')
+
+  assert.ok(audiences.patient.startsWith('Hi Marcus,\n\nYour provider raised your dose.'))
+  assert.match(audiences.patient, /To book your AlphaMD Provider, Secondary Follow-Up/)
+})
+
+test('the booking link itself is not in the previewed or recorded text', () => {
+  // A single-use URL would be dead by the time anyone read the note, and one on
+  // screen before approval is one that can be sent without approving.
+  const audiences = reviewAudiences({ ...full, consultation: consult() }, 'Dr Smith')
+
+  assert.ok(!audiences.patient.includes(BOOKING_URL))
+  assert.ok(!audiences.chart.includes(BOOKING_URL))
+  assert.match(audiences.patient, /\[single-use booking link\]/)
+})
+
+test('a consultation with no message written still tells the patient how to book', () => {
+  // Being asked to come in and told nothing about how would be the one combination
+  // the patient cannot act on.
+  const audiences = reviewAudiences(
+    draft({ disposition: 'follow_up_needed', consultation: consult() }),
+    'Dr Smith'
+  )
+
+  assert.match(audiences.patient, /To book your AlphaMD Provider, Secondary Follow-Up/)
+  assert.match(audiences.chart, /Message for the patient: To book your/)
 })
 
 test('the customer service text is the same text the note carries', () => {
@@ -673,7 +879,7 @@ test('every flag and status a completion can touch has a label to show', () => {
   // as a bare number, or as nothing at all.
   for (const disposition of DISPOSITIONS) {
     const plan = planCompletion(
-      draft({ disposition, doseChanges: [testosterone], followUpKinds: ['more_labs'] }),
+      draft({ disposition, doseChanges: [testosterone], labOrders: [labs()] }),
       'Dr Smith'
     )
 

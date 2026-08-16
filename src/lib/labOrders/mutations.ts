@@ -91,6 +91,35 @@ async function patientFor(patientId: string): Promise<{ status: number | null; s
 }
 
 /**
+ * Whether these orders could be placed for this patient, without writing
+ * anything.
+ *
+ * For the review that places its orders at completion. `scheduleLabOrder` makes
+ * these same checks, but by the time it runs the review row has already been
+ * flipped to `finished`, so a refusal there can only be reported as a warning
+ * about labs that never went out. Asking first means an order that cannot be
+ * placed stops the completion while the provider can still fix it.
+ *
+ * Returns the problems, or an empty array when every order is placeable.
+ */
+export async function labOrderProblems(patientId: string, orders: LabOrder[]): Promise<string[]> {
+  if (orders.length === 0) return []
+
+  const patient = await patientFor(patientId)
+
+  if (patient.status !== null && BLOCKED_PATIENT_STATUSES.includes(patient.status)) {
+    return [BLOCKED_PATIENT_MESSAGE]
+  }
+
+  return orders.flatMap((order, index) =>
+    validateOrder(order, patient.state).map((problem) => `Lab order ${index + 1}: ${problem}`)
+  )
+}
+
+const BLOCKED_PATIENT_MESSAGE =
+  'This patient’s subscription is cancelled or dropped, so a lab order would never be sent. Reactivate them first, or remove the order.'
+
+/**
  * Place an order, dated now or in the future.
  *
  * The order is validated a second time here against the patient's **real** state
@@ -112,11 +141,7 @@ export async function scheduleLabOrder(
   if (problems.length) return { ok: false, error: problems.join(' ') }
 
   if (patient.status !== null && BLOCKED_PATIENT_STATUSES.includes(patient.status)) {
-    return {
-      ok: false,
-      error:
-        'This patient’s subscription is cancelled or dropped, so a lab order would never be sent. Reactivate them first.',
-    }
+    return { ok: false, error: BLOCKED_PATIENT_MESSAGE }
   }
 
   const scheduledDate = scheduledDateFor(order.timing, order.customDate)

@@ -3,9 +3,8 @@
 import { revalidatePath } from 'next/cache'
 
 import { checkProviderAccess } from '@/lib/authz'
-import { requestConsultation } from '@/lib/consultations/mutations'
-import { cancelScheduledLabOrder, scheduleLabOrder } from '@/lib/labOrders/mutations'
-import type { LabOrder } from '@/lib/labOrders/order'
+import { mintConsultLink, type MintedLink } from '@/lib/consultations/mutations'
+import { cancelScheduledLabOrder } from '@/lib/labOrders/mutations'
 import {
   completeLabReview,
   escalateLabReview,
@@ -19,7 +18,7 @@ import { parseDraft } from '@/lib/labReviews/reviewDraft'
 import { signLabFile } from '@/lib/labReviews/storage'
 import { isReplyIdentity, type ReplyIdentity } from '@/lib/labReviews/replyIdentity'
 import { replyToTicket } from '@/lib/zendesk'
-import type { ConsultState, WriteState } from './state'
+import type { WriteState } from './state'
 
 /**
  * Server actions for the lab-review screen. Every one re-checks access first —
@@ -234,28 +233,13 @@ export async function escalateLabReviewAction(
 }
 
 /**
- * Order labs, now or on a future date.
+ * Cancel a still-pending order.
  *
- * The order is re-validated inside `scheduleLabOrder` against the patient's state
- * as read from the database, so nothing here trusts the shape that arrives. The
- * patient is resolved from the review rather than passed in — this writes to a
- * chart, and the review is the only trustworthy statement of whose chart it is.
+ * The only lab-order write reachable on its own. Placing one is not: an order
+ * composed in the flyout is saved into the draft and placed by
+ * `completeLabReview` when the review is approved, so there is no action here
+ * that could send labs out from under a half-written review.
  */
-export async function scheduleLabOrderAction(
-  reviewId: string,
-  order: LabOrder
-): Promise<WriteState> {
-  const access = await checkProviderAccess()
-  if (!access.ok) return { status: 'error', message: DENIED }
-
-  const result = await scheduleLabOrder(access.access, reviewId, order)
-  if (!result.ok) return { status: 'error', message: result.error }
-
-  revalidateReview(reviewId)
-  return { status: 'ok', warning: result.warning }
-}
-
-/** Cancel a still-pending order. */
 export async function cancelLabOrderAction(
   reviewId: string,
   scheduledId: string
@@ -270,25 +254,23 @@ export async function cancelLabOrderAction(
   return { status: 'ok', warning: result.warning }
 }
 
-/** Mint a single-use Calendly link and email it to the patient. */
-export async function requestConsultationAction(
+/**
+ * Mint the booking link for a consultation the provider is attaching.
+ *
+ * Not the invitation — nothing is emailed and nothing is recorded. This exists so
+ * the Calendly call happens while the flyout is open, where a failure is a message
+ * the provider can act on, instead of after the review has been marked finished.
+ *
+ * The link is returned to the flyout to be stored in the draft, and is deliberately
+ * never rendered: approving is still the only thing that tells the patient
+ * anything, so there is nothing here for a provider to copy out early.
+ */
+export async function mintConsultLinkAction(
   reviewId: string,
-  input: { eventTypeId: string; message: string }
-): Promise<ConsultState> {
+  eventTypeId: string
+): Promise<MintedLink> {
   const access = await checkProviderAccess()
-  if (!access.ok) return { status: 'error', message: DENIED }
+  if (!access.ok) return { ok: false, error: DENIED }
 
-  const result = await requestConsultation(access.access, reviewId, {
-    eventTypeId: String(input.eventTypeId ?? ''),
-    message: String(input.message ?? ''),
-  })
-  if (!result.ok) return { status: 'error', message: result.error }
-
-  revalidateReview(reviewId)
-  return {
-    status: 'sent',
-    bookingUrl: result.bookingUrl,
-    sentTo: result.sentTo,
-    warning: result.warning,
-  }
+  return mintConsultLink(reviewId, String(eventTypeId ?? ''))
 }

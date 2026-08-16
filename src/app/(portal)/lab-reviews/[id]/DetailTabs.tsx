@@ -6,7 +6,7 @@ import { CornerDownLeft, EyeOff, Paperclip, Send } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Textarea } from '@/components/ui/textarea'
+import { DictationTextarea } from '@/components/ui/dictation-textarea'
 import { SummaryBlocks } from '@/components/summary-blocks'
 import { shortDate, shortDateTime } from '@/lib/labReviews/format'
 import {
@@ -478,11 +478,11 @@ function MessageThread({
               ))}
             </select>
           </label>
-          <Textarea
+          <DictationTextarea
             name="body"
             rows={3}
             value={body}
-            onChange={(e) => setBody(e.target.value)}
+            onValueChange={setBody}
             placeholder="Reply to this thread…"
             aria-label={`Reply to ${thread.subject}`}
           />

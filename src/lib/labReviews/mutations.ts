@@ -1,6 +1,10 @@
 import 'server-only'
 
 import { ROLE, type ProviderAccess } from '@/lib/authz'
+import { consultProblems, requestConsultation } from '@/lib/consultations/mutations'
+import type { ConsultRequest } from '@/lib/consultations/request'
+import { labOrderProblems, scheduleLabOrder } from '@/lib/labOrders/mutations'
+import { orderWhen, type LabOrder } from '@/lib/labOrders/order'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { FLAG } from './clinicalIds'
 import {
@@ -305,6 +309,13 @@ export async function saveReviewDraft(
  * and the review row is the only one that records the whole decision. A side
  * effect that fails comes back as a `warning`, not an error: the review *is*
  * finished, and telling the provider it failed would send them to do it twice.
+ *
+ * Lab orders are the exception that proves the rule. They are the one side effect
+ * that reaches the patient's inbox and their wallet, so they are checked against
+ * the patient's real state **before** the review row is touched: a completion that
+ * cannot place its orders refuses with nothing written, while the provider can
+ * still remove the order or fix the patient's record. Only the placement itself
+ * happens afterwards, where a failure is a warning like any other.
  */
 export async function completeLabReview(
   access: ProviderAccess,
@@ -323,6 +334,16 @@ export async function completeLabReview(
   if (review.assignedTo && review.assignedTo !== access.userId) {
     const holder = await nameOf(review.assignedTo)
     return { ok: false, error: `${holder} holds this review. It cannot be finished from here.` }
+  }
+
+  // Asked before anything is written, because the answer can only be acted on
+  // while the review is still open.
+  const preflight = [
+    ...(await labOrderProblems(review.patientId, draft.labOrders)),
+    ...(await consultProblems(review.patientId, draft.consultation)),
+  ]
+  if (preflight.length) {
+    return { ok: false, error: `${preflight.join(' ')} Nothing has been saved.` }
   }
 
   const admin = createAdminClient()
@@ -358,6 +379,8 @@ export async function completeLabReview(
   }
 
   const warnings = await applySideEffects(access, review.patientId, plan)
+  warnings.push(...(await placeLabOrders(access, reviewId, draft.labOrders)))
+  warnings.push(...(await sendConsultInvite(access, reviewId, draft.consultation)))
 
   const logged = await logLabReviewEvent({
     labReviewId: reviewId,
@@ -371,6 +394,8 @@ export async function completeLabReview(
       addedFlagIds: plan.addFlagIds,
       removedFlagIds: plan.removeFlagIds,
       patientStatusId: plan.patientStatusId,
+      labOrdersPlaced: draft.labOrders.length,
+      consultationRequested: draft.consultation?.eventTypeId ?? null,
       sideEffectWarnings: warnings,
     },
   })
@@ -385,6 +410,76 @@ export async function completeLabReview(
     }
   }
   return { ok: true }
+}
+
+/**
+ * Place the orders the review was carrying, one at a time.
+ *
+ * `scheduleLabOrder` is reused rather than inlined, so an order placed from a
+ * completed review is written exactly like one placed on its own: the same row in
+ * `scheduled_lab_requisitions` for the main app's cron, the same detailed chart
+ * note listing every test, the same onboarding status bump, and its own
+ * `labs_ordered` entry in the review's history.
+ *
+ * Failures come back as warnings because the review is already finished by now.
+ * That is only tolerable because `labOrderProblems` has already ruled out the
+ * predictable refusals; what is left is the database being unreachable, which no
+ * amount of ordering could have prevented.
+ */
+async function placeLabOrders(
+  access: ProviderAccess,
+  reviewId: string,
+  orders: LabOrder[]
+): Promise<string[]> {
+  const warnings: string[] = []
+
+  for (const order of orders) {
+    // Named by its date, which is the only thing that tells two orders on one
+    // review apart in a warning the provider reads once.
+    const where = `the lab order for ${order.timing === 'now' ? 'now' : orderWhen(order)}`
+    try {
+      const result = await scheduleLabOrder(access, reviewId, order)
+      if (!result.ok) warnings.push(`${where} was not placed (${result.error})`)
+      else if (result.warning) warnings.push(`${where} was placed but not fully recorded`)
+    } catch (error) {
+      warnings.push(
+        `${where} was not placed (${error instanceof Error ? error.message : 'unknown error'})`
+      )
+    }
+  }
+
+  return warnings
+}
+
+/**
+ * Send the booking link the review was carrying.
+ *
+ * `requestConsultation` is reused unchanged, so an invitation sent from a completed
+ * review is indistinguishable from one sent on its own: the same single-use
+ * Calendly link, the same Paubox email, the same chart note and the same
+ * `consultation_requested` entry in the review's history.
+ *
+ * A failure is a warning for the same reason a lab order's is — the review is
+ * already finished, and a Calendly outage must not un-finish it. What is left after
+ * `consultProblems` is a third party being unreachable, which is worth telling the
+ * provider about precisely because the fix is to invite the patient by hand.
+ */
+async function sendConsultInvite(
+  access: ProviderAccess,
+  reviewId: string,
+  request: ConsultRequest | null
+): Promise<string[]> {
+  if (!request) return []
+
+  try {
+    const result = await requestConsultation(access, reviewId, request)
+    if (!result.ok) return [`the consultation invitation was not sent (${result.error})`]
+    if (result.warning) return ['the consultation invitation was sent but not fully recorded']
+    return []
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'unknown error'
+    return [`the consultation invitation was not sent (${message})`]
+  }
 }
 
 /**

@@ -1,8 +1,6 @@
-import {
-  DISPOSITION_LABELS,
-  FOLLOW_UP_LABELS,
-  type ReviewDraft,
-} from '../labReviews/reviewDraft.ts'
+import { consultLine } from '../consultations/request.ts'
+import { orderLine } from '../labOrders/order.ts'
+import { DISPOSITION_LABELS, type ReviewDraft } from '../labReviews/reviewDraft.ts'
 import { ESCALATION_TARGET_LABELS, type Escalation } from '../labReviews/needsAttention.ts'
 import type { ReviewField } from './reviewFields.ts'
 
@@ -57,10 +55,28 @@ export function describeDecision(
     )
   }
 
-  if (draft.followUpKinds.length) {
+  // The one recorded decision the patient acts on themselves, so a message
+  // written for them can say the draw is coming and roughly when.
+  for (const order of draft.labOrders) {
+    lines.push(`Labs being ordered — ${orderLine(order)}.`)
+  }
+
+  // The other thing the patient has to do something about. Worth a line for the
+  // same reason: a message that does not mention the booking link leaves them to
+  // work out why one arrived.
+  if (draft.consultation) {
     lines.push(
-      `Follow-up required: ${draft.followUpKinds.map((k) => FOLLOW_UP_LABELS[k]).join(', ')}.`
+      `The patient is being emailed a link to book a consultation — ${consultLine(draft.consultation)}.`
     )
+    // The booking link and the sentence explaining it are appended to the patient's
+    // message automatically, so a draft that writes its own booking instructions
+    // produces two of them, one of which has no link under it.
+    lines.push(
+      'How to book, and the link itself, are added to the end of the message to the patient automatically. Do not write booking instructions or a link.'
+    )
+    if (draft.consultation.message.trim()) {
+      lines.push(`Said to the patient in that invitation: ${draft.consultation.message.trim()}`)
+    }
   }
 
   for (const med of draft.newMedications) {

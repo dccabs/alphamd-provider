@@ -3,21 +3,11 @@
 import { useState, useTransition } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import {
-  CalendarPlus,
-  Check,
-  ChevronLeft,
-  FlaskConical,
-  MoreHorizontal,
-  Play,
-  TriangleAlert,
-  UserPlus,
-} from 'lucide-react'
+import { Check, ChevronLeft, MoreHorizontal, Play, TriangleAlert, UserPlus } from 'lucide-react'
 
 import { PatientStatusPill } from '@/components/patient-status'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import type { LabOrder } from '@/lib/labOrders/order'
 import type { LabProviderOption, ScheduledLabOrder } from '@/lib/labOrders/queries'
 import type { Analyte } from '@/lib/labReviews/analytes'
 import type { Consultation } from '@/lib/labReviews/consultations'
@@ -31,19 +21,15 @@ import {
   cancelLabOrderAction,
   escalateLabReviewAction,
   reassignLabReviewAction,
-  requestConsultationAction,
-  scheduleLabOrderAction,
   signFileAction,
   startLabReviewAction,
 } from '../actions'
-import { CONSULT_IDLE, IDLE, type ConsultState, type WriteState } from '../state'
+import { IDLE, type WriteState } from '../state'
 import { DetailTabs } from './DetailTabs'
 import { EscalatePanel } from './EscalatePanel'
 import { DocumentViewer } from './DocumentViewer'
 import { LabValuesCard } from './LabValuesCard'
-import { OrderLabsPanel } from './OrderLabsPanel'
 import { PatientSnapshot } from './PatientSnapshot'
-import { RequestConsultPanel } from './RequestConsultPanel'
 import { ReviewModal } from './ReviewModal'
 import type {
   CatalogMedication,
@@ -164,9 +150,6 @@ export function LabReviewScreen({
   const [actionsOpen, setActionsOpen] = useState(false)
   const [assignOpen, setAssignOpen] = useState(false)
   const [escalateOpen, setEscalateOpen] = useState(false)
-  const [orderOpen, setOrderOpen] = useState(false)
-  const [consultOpen, setConsultOpen] = useState(false)
-  const [consult, setConsult] = useState<ConsultState>(CONSULT_IDLE)
   const [write, setWrite] = useState<WriteState>(IDLE)
   const [pending, startTransition] = useTransition()
   const router = useRouter()
@@ -244,22 +227,11 @@ export function LabReviewScreen({
   }
 
   /**
-   * Ordering labs is the one action here that reaches the patient directly — the
-   * cron emails and texts them — so the panel closes only on success, and the
-   * refresh is what brings the new row into the already-ordered list.
+   * Cancelling is the one lab-order action that happens the moment it is pressed.
+   * The orders composed inside the flyout wait for approval, but a row that is
+   * already `pending` is one the main app's cron may act on within minutes, so
+   * "cancel it" cannot mean "cancel it when I am finished writing".
    */
-  const orderLabs = (order: LabOrder) => {
-    setWrite(IDLE)
-    startTransition(async () => {
-      const result = await scheduleLabOrderAction(reviewId, order)
-      setWrite(result)
-      if (result.status !== 'error') {
-        setOrderOpen(false)
-        router.refresh()
-      }
-    })
-  }
-
   const cancelOrder = (scheduledId: string) => {
     setWrite(IDLE)
     startTransition(async () => {
@@ -267,28 +239,6 @@ export function LabReviewScreen({
       router.refresh()
     })
   }
-
-  /**
-   * The panel stays open after a successful send, showing the booking link. The
-   * email has already gone and the link is single-use, so closing on success would
-   * throw away the only copy of it.
-   */
-  const requestConsult = (input: { eventTypeId: string; message: string }) => {
-    setConsult(CONSULT_IDLE)
-    startTransition(async () => {
-      setConsult(await requestConsultationAction(reviewId, input))
-    })
-  }
-
-  const closeConsult = () => {
-    setConsultOpen(false)
-    setConsult(CONSULT_IDLE)
-    // A sent invitation is on the chart and in the review's history, neither of
-    // which is on screen until the page reloads.
-    router.refresh()
-  }
-
-  const pendingLabCount = scheduledLabs.filter((lab) => lab.status === 'pending').length
 
   const demographics = [
     header.age != null ? String(header.age) : null,
@@ -433,31 +383,6 @@ export function LabReviewScreen({
                     <TriangleAlert className="size-3.5" />
                     Mark needs attention
                   </button>
-                  <button
-                    type="button"
-                    disabled={pending}
-                    onClick={() => {
-                      setActionsOpen(false)
-                      setOrderOpen(true)
-                    }}
-                    className="flex items-center gap-2 rounded-md px-2.5 py-2 text-left text-[13px] hover:bg-muted disabled:text-muted-foreground disabled:hover:bg-transparent"
-                  >
-                    <FlaskConical className="size-3.5" />
-                    Order labs
-                    {pendingLabCount > 0 && <Badge variant="secondary">{pendingLabCount}</Badge>}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={pending}
-                    onClick={() => {
-                      setActionsOpen(false)
-                      setConsultOpen(true)
-                    }}
-                    className="flex items-center gap-2 rounded-md px-2.5 py-2 text-left text-[13px] hover:bg-muted disabled:text-muted-foreground disabled:hover:bg-transparent"
-                  >
-                    <CalendarPlus className="size-3.5" />
-                    Request a consultation
-                  </button>
                   {MORE_ACTIONS.map((action) => (
                     <span
                       key={action.id}
@@ -494,31 +419,6 @@ export function LabReviewScreen({
           <p className="rounded-xl border border-amber-200 bg-amber-50 px-5 py-3 text-[13px] text-amber-900">
             <span className="font-semibold">Needs attention:</span> {needsAttentionReason}
           </p>
-        )}
-
-        {orderOpen && (
-          <OrderLabsPanel
-            patientState={header.state}
-            providers={labProviders}
-            existing={scheduledLabs}
-            pending={pending}
-            onSubmit={orderLabs}
-            onCancel={cancelOrder}
-            onClose={() => setOrderOpen(false)}
-          />
-        )}
-
-        {consultOpen && (
-          <RequestConsultPanel
-            patientEmail={header.email}
-            patientStatusId={header.statusId}
-            patientGender={header.gender}
-            consultations={consultations}
-            state={consult}
-            pending={pending}
-            onSubmit={requestConsult}
-            onClose={closeConsult}
-          />
         )}
 
         {(started || write.status !== 'idle') && (
@@ -588,10 +488,19 @@ export function LabReviewScreen({
           patientFirstName={header.firstName}
           providerName={viewerName}
           patientStatus={header.status}
+          patientStatusId={header.statusId}
+          patientState={header.state}
+          patientEmail={header.email}
+          patientGender={header.gender}
           collectionDate={collectionDate}
           medications={medications}
           catalog={catalog}
           dosageOptions={dosageOptions}
+          labProviders={labProviders}
+          scheduledLabs={scheduledLabs}
+          consultations={consultations}
+          cancellingLabOrder={pending}
+          onCancelScheduledLab={cancelOrder}
           initialDraft={draft}
           draftUpdatedAt={draftUpdatedAt}
           onClose={closeReview}

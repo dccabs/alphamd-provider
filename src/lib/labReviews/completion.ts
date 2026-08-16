@@ -1,14 +1,15 @@
 // Explicit `.ts` specifiers: this module is exercised by `npm test`, which runs
 // TypeScript through Node's type stripping and needs the real extension. See the
 // note on `allowImportingTsExtensions` in tsconfig.json.
-import { FLAG, PATIENT_STATUS } from './clinicalIds.ts'
+import { eventTypeById } from '../consultations/eventTypes.ts'
 import {
-  DISPOSITION_LABELS,
-  FOLLOW_UP_LABELS,
-  type Disposition,
-  type FollowUpKind,
-  type ReviewDraft,
-} from './reviewDraft.ts'
+  consultLine,
+  patientBookingBlock,
+  validateConsultRequest,
+} from '../consultations/request.ts'
+import { orderLine, orderWhen, validateOrder, type LabOrder } from '../labOrders/order.ts'
+import { FLAG, PATIENT_STATUS } from './clinicalIds.ts'
+import { DISPOSITION_LABELS, type Disposition, type ReviewDraft } from './reviewDraft.ts'
 
 /**
  * What finishing a lab review means, decided as a pure function.
@@ -38,7 +39,6 @@ import {
  */
 export type DispositionDetail = {
   disposition: Disposition
-  followUpKinds: FollowUpKind[]
   doseChanges: {
     medicationId: number | null
     medication: string
@@ -53,6 +53,18 @@ export type DispositionDetail = {
     dose: string
     sig: string | null
   }[]
+  /** The orders placed at completion, as composed. Kept whole rather than
+   *  summarised: `scheduled_lab_requisitions` records what was sent, and this
+   *  records what the review decided to send, which is what a later reader needs
+   *  when the two disagree. */
+  labOrders: LabOrder[]
+  /** The appointment the patient was invited to book, resolved to its name so a
+   *  later reader is not left holding a Calendly UUID. */
+  consultation: {
+    eventTypeId: string
+    eventTypeName: string
+    message: string | null
+  } | null
   patientMessage: string | null
   csInstructions: string | null
 }
@@ -110,22 +122,41 @@ export function validateCompletion(draft: ReviewDraft): string[] {
     )
   }
 
-  if (draft.disposition === 'follow_up_needed') {
-    if (draft.followUpKinds.length === 0) {
-      problems.push('Say what the follow-up needs.')
-    }
-    if (draft.followUpKinds.includes('patient_instructions') && !draft.patientMessage.trim()) {
-      problems.push('Write the message for the patient.')
-    }
-    if (
-      draft.followUpKinds.includes('new_medication') &&
-      !draft.newMedications.some((m) => m.name.trim())
-    ) {
-      problems.push('Add one under New medications, or untick "Add a new medication".')
-    }
+  // A follow-up with nothing to follow up on is a record nobody can act on. This
+  // used to be checked against a group of checkboxes that declared what the
+  // follow-up needed; the declaration could disagree with what was actually
+  // recorded, so it is now checked against the recorded things themselves.
+  if (draft.disposition === 'follow_up_needed' && !followUpArtifacts(draft)) {
+    problems.push(
+      'Say what the follow-up is: a message for the patient, instructions for customer service, a lab order, a consultation, or a new medication.'
+    )
   }
 
+  problems.push(...validateConsultRequest(draft.consultation))
+
+  // An order that lost its provider or its tests can only come from a draft saved
+  // by an older build. Refusing it by name beats placing a requisition for
+  // nothing. The state-dependent rules — comped labs in New York and New Jersey —
+  // are checked on the server against the patient's real state.
+  draft.labOrders.forEach((order, index) => {
+    for (const problem of validateOrder(order, null)) {
+      problems.push(`Lab order ${index + 1}: ${problem}`)
+    }
+  })
+
   return problems
+}
+
+/** Whether anything was recorded that a follow-up could consist of. Asking the
+ *  patient in to be seen counts: that is the follow-up, not a note about one. */
+function followUpArtifacts(draft: ReviewDraft): boolean {
+  return Boolean(
+    draft.patientMessage.trim() ||
+      draft.csInstructions.trim() ||
+      draft.labOrders.length ||
+      draft.consultation ||
+      namedMedications(draft).length
+  )
 }
 
 function namedMedications(draft: ReviewDraft) {
@@ -258,6 +289,17 @@ function customerServiceBlock(draft: ReviewDraft): string {
   return [
     ...changes.map((change) => change.cs),
     ...added.map((medication) => medication.cs),
+    // Nothing for customer service to do, but they are who the patient asks when
+    // an order email arrives, so they are told it is coming.
+    ...draft.labOrders.map((order) => `Labs ordered — ${orderLine(order)}`),
+    draft.labOrders.length
+      ? 'The patient is emailed each lab order and pays at checkout; nothing to do here unless they ask about it.'
+      : null,
+    // Also nothing to do, and also something the patient will ring about: they
+    // receive a booking link out of the blue and ask why.
+    draft.consultation
+      ? `Consultation — the patient is emailed a booking link for ${consultLine(draft.consultation)}. They book it themselves.`
+      : null,
     draft.csInstructions.trim() || null,
   ]
     .filter(Boolean)
@@ -288,10 +330,34 @@ export type ReviewAudiences = {
 
 export function reviewAudiences(draft: ReviewDraft, providerName: string): ReviewAudiences {
   return {
-    patient: draft.patientMessage.trim(),
+    patient: patientText(draft),
     customerService: customerServiceBlock(draft),
     chart: planCompletion(draft, providerName).note,
   }
+}
+
+/**
+ * What the patient reads: the provider's own words, then how to book if they are
+ * being asked in.
+ *
+ * The booking paragraph is appended rather than typed because the URL is minted by
+ * the dialog and never shown to the provider, so it cannot be in the box they wrote
+ * in. It is also the reason a staged consultation means the patient hears something
+ * even when the message box was left empty — they cannot be asked to book and told
+ * nothing about how.
+ *
+ * The link is **masked** here. This text is previewed before approval and recorded
+ * on the chart, and neither is a delivery: a single-use URL would be dead by the
+ * time anyone read the note, and showing one before approval would be a link that
+ * could be sent without it. Whatever eventually delivers this message substitutes
+ * the real one by calling `patientBookingBlock` with `consultation.bookingUrl`.
+ */
+function patientText(draft: ReviewDraft): string {
+  const written = draft.patientMessage.trim()
+  if (!draft.consultation) return written
+
+  const booking = patientBookingBlock(draft.consultation, null)
+  return written ? `${written}\n\n${booking}` : booking
 }
 
 export function planCompletion(draft: ReviewDraft, providerName: string): CompletionPlan {
@@ -344,17 +410,24 @@ export function planCompletion(draft: ReviewDraft, providerName: string): Comple
 
   for (const change of changes) lines.push(change.chart)
 
-  if (disposition === 'follow_up_needed' && draft.followUpKinds.length) {
-    lines.push(
-      `Follow-up needed: ${draft.followUpKinds.map((k) => FOLLOW_UP_LABELS[k]).join(', ')}`
-    )
+  // A line each, ahead of the detail `scheduleLabOrder` writes as its own note.
+  // This one states that the review ordered them; that one is the order itself,
+  // with every test and diagnosis code on it.
+  for (const order of draft.labOrders) lines.push(`Labs ordered: ${orderLine(order)}`)
+
+  // Ahead of the note `requestConsultation` writes, for the same reason: this line
+  // says the review asked for the appointment, that one says the invitation went
+  // out and to which address.
+  if (draft.consultation) {
+    lines.push(`Consultation requested: ${consultLine(draft.consultation)}`)
   }
 
   // What the patient was told belongs on the chart: the record has to show that
-  // the result was communicated, not only that it was read.
-  if (draft.patientMessage.trim()) {
-    lines.push(`Message for the patient: ${draft.patientMessage.trim()}`)
-  }
+  // the result was communicated, not only that it was read. Including the booking
+  // paragraph, so the note shows they were told how to book and not merely that a
+  // consultation was wanted.
+  const forPatient = patientText(draft)
+  if (forPatient) lines.push(`Message for the patient: ${forPatient}`)
 
   for (const medication of added) lines.push(medication.chart)
 
@@ -368,7 +441,6 @@ export function planCompletion(draft: ReviewDraft, providerName: string): Comple
     note: lines.join('\n'),
     detail: {
       disposition,
-      followUpKinds: draft.followUpKinds,
       doseChanges: doseChangesFor(draft).map((change) => ({
         medicationId: change.medicationId,
         medication: change.medication.trim(),
@@ -382,6 +454,12 @@ export function planCompletion(draft: ReviewDraft, providerName: string): Comple
         dose: m.dose.trim(),
         sig: m.sig.trim() || null,
       })),
+      labOrders: draft.labOrders,
+      consultation: draft.consultation && {
+        eventTypeId: draft.consultation.eventTypeId,
+        eventTypeName: eventTypeById(draft.consultation.eventTypeId)?.name ?? 'Unknown type',
+        message: draft.consultation.message.trim() || null,
+      },
       patientMessage: draft.patientMessage.trim() || null,
       csInstructions: draft.csInstructions.trim() || null,
     },
@@ -407,8 +485,19 @@ function resolutionLine(draft: ReviewDraft, label: string): string {
       .join('; ')}`
   }
 
-  if (draft.disposition === 'follow_up_needed' && draft.followUpKinds.length) {
-    return `${label}: ${draft.followUpKinds.map((k) => FOLLOW_UP_LABELS[k]).join(', ')}`
+  // When labs were ordered, that is the most specific thing about the review. The
+  // date rather than the panel: a queue row has no space for fifteen test names,
+  // and "labs in 12 weeks" is what a reader is scanning for.
+  if (draft.labOrders.length) {
+    return `${label}: labs — ${draft.labOrders.map((order) => orderWhen(order)).join('; ')}`
+  }
+
+  // Behind labs because a draw the patient must pay for and attend is the more
+  // consequential of the two, and ahead of the note because "booking link sent"
+  // is a state a reader can act on where a first sentence is only prose.
+  if (draft.consultation) {
+    const eventType = eventTypeById(draft.consultation.eventTypeId)
+    return `${label}: consultation — ${eventType?.name ?? 'type no longer offered'}`
   }
 
   const firstLine = draft.providerNote.trim().split('\n')[0]?.trim()

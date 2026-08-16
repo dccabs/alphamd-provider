@@ -154,6 +154,83 @@ export const EMPTY_ORDER: LabOrder = {
   diagnosisCodes: [],
 }
 
+/**
+ * Orders read back out of `lab_reviews.draft`.
+ *
+ * An order composed in the flyout is autosaved and only placed when the review is
+ * approved, so this is reading jsonb written by an older build of this file the
+ * moment the shape changes — the same contract as `parseDraft`, and the reason it
+ * validates structurally rather than trusting the column.
+ *
+ * Deliberately structural only: whether `cbc_85025` is still an orderable code,
+ * or whether a comped test is legal in the patient's state, is `validateOrder`'s
+ * job, and it is asked again on the server with the patient's real state before
+ * anything is written. Dropping a row here for a retired code would lose an order
+ * silently; failing it there names the problem while the provider can still fix
+ * it.
+ */
+export function parseOrders(value: unknown): LabOrder[] {
+  if (!Array.isArray(value)) return []
+
+  return value
+    .filter((row): row is Record<string, unknown> => !!row && typeof row === 'object')
+    .map((row) => ({
+      timing: isTiming(row.timing) ? row.timing : 'now',
+      customDate: text(row.customDate),
+      providerId: text(row.providerId),
+      testCodes: codes(row.testCodes),
+      requiredCodes: codes(row.requiredCodes),
+      compedCodes: codes(row.compedCodes),
+      diagnosisCodes: codes(row.diagnosisCodes),
+    }))
+}
+
+function isTiming(value: unknown): value is OrderTiming {
+  return typeof value === 'string' && (ORDER_TIMINGS as string[]).includes(value)
+}
+
+function text(value: unknown): string {
+  return typeof value === 'string' ? value : ''
+}
+
+/** Deduplicated: a code held twice would be counted twice everywhere it is
+ *  listed, and the payload only has one flag per test to set. */
+function codes(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return [...new Set(value.filter((code): code is string => typeof code === 'string'))]
+}
+
+/**
+ * When an order goes out, as a reader would say it.
+ *
+ * Both the interval and the date it lands on, because the interval is what the
+ * provider chose and the date is what the patient will see. A picked date is
+ * given alone: the interval it happens to work out to was not the choice.
+ */
+export function orderWhen(order: LabOrder, from: Date = new Date()): string {
+  if (order.timing === 'now') return 'Now'
+
+  const date = scheduledDateFor(order.timing, order.customDate, from)
+  if (!date) return 'No date yet'
+
+  const when = date.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
+  return order.timing === 'custom' ? when : `${ORDER_TIMING_LABELS[order.timing]} (${when})`
+}
+
+/**
+ * One line describing an order: when it goes out, and what is on it.
+ *
+ * Read by the flyout's list of attached orders, the confirmation summary, the
+ * chart note and the context handed to the AI assistant. Composed once here for
+ * the same reason `doseChangeLines` is composed once in `completion.ts`: four
+ * copies of "12 weeks — CBC, CMP" would eventually disagree, and what disagreed
+ * would be a lab order the provider was shown but did not place.
+ */
+export function orderLine(order: LabOrder, from: Date = new Date()): string {
+  const names = order.testCodes.map(testLabel).join(', ') || 'no tests selected'
+  return `${orderWhen(order, from)} — ${names}`
+}
+
 export function applyPreset(order: LabOrder, preset: LabPreset): LabOrder {
   return {
     ...order,

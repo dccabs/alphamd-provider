@@ -20,18 +20,3 @@ export type WriteState =
   | { status: 'error'; message: string }
 
 export const IDLE: WriteState = { status: 'idle' }
-
-/**
- * The result of asking a patient to book a consultation.
- *
- * `bookingUrl` comes back on success so the panel can show it. That is not a
- * convenience: the link is single-use and the email has already gone, so if the
- * patient says they never received it, having the link on screen is the difference
- * between resending it another way and burning a second one.
- */
-export type ConsultState =
-  | { status: 'idle' }
-  | { status: 'sent'; bookingUrl: string; sentTo: string; warning?: string }
-  | { status: 'error'; message: string }
-
-export const CONSULT_IDLE: ConsultState = { status: 'idle' }

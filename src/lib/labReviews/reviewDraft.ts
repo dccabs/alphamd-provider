@@ -1,3 +1,8 @@
+// Explicit `.ts` specifier, as in `completion.ts`: this module is exercised by
+// `npm test`, which runs TypeScript through Node's type stripping.
+import { parseConsultRequest, type ConsultRequest } from '../consultations/request.ts'
+import { parseOrders, type LabOrder } from '../labOrders/order.ts'
+
 /**
  * The shape of an in-progress lab review, and the vocabulary of dispositions it
  * can land on. Pure, so the flyout can import it and it can be unit-tested.
@@ -50,20 +55,7 @@ export const DISPOSITION_HINTS: Record<Disposition, string> = {
   treatment_not_recommended: 'Close out and message the patient',
   dose_change: 'Adjust an existing medication',
   continue_protocol: 'No changes; continue as prescribed',
-  follow_up_needed: 'More labs, a new medication, or specific instructions',
-}
-
-/** What a follow-up actually needs. More than one can apply. */
-export const FOLLOW_UP_KINDS = ['more_labs', 'new_medication', 'patient_instructions'] as const
-
-export type FollowUpKind = (typeof FOLLOW_UP_KINDS)[number]
-
-export const FOLLOW_UP_LABELS: Record<FollowUpKind, string> = {
-  more_labs: 'Needs more labs',
-  new_medication: 'Add a new medication',
-  // The id still says "instructions" because it is stored on reviews already
-  // finished; what it points at is now the message the patient is sent.
-  patient_instructions: 'A specific message for the patient',
+  follow_up_needed: 'More labs, a new medication, or a message for the patient',
 }
 
 /**
@@ -116,15 +108,27 @@ export type DraftMedication = {
  * concern" box used to sit alongside them and was cut: a concern worth recording
  * is part of the assessment, and having somewhere else to put it only split the
  * clinical reasoning across two boxes that were then both read as incomplete.
+ *
+ * A "what the follow-up needs" checkbox group was cut for the same reason. It
+ * asked the provider to declare that more labs were needed, or a medication
+ * added, or the patient written to — next to the panels where they do each of
+ * those things. The declaration and the act could disagree, and the checkbox is
+ * the half nothing downstream can act on.
  */
 export type ReviewDraft = {
   disposition: Disposition | null
-  followUpKinds: FollowUpKind[]
   /** In the order the provider confirmed them, at most one per prescription. */
   doseChanges: DoseChange[]
   /** What the patient is told, in their words rather than the chart's. */
   patientMessage: string
   newMedications: DraftMedication[]
+  /** Composed here, placed at completion. An order is a real thing that reaches
+   *  the patient by email, so it waits for the same approval as the chart note
+   *  rather than going out while the review is still being written. */
+  labOrders: LabOrder[]
+  /** Which appointment the patient is being asked to book. Staged for the same
+   *  reason as a lab order: approving is what emails them the booking link. */
+  consultation: ConsultRequest | null
   csInstructions: string
   /** The provider's own half of the chart note. The generated half is composed at
    *  completion, not stored here. */
@@ -133,10 +137,11 @@ export type ReviewDraft = {
 
 export const EMPTY_DRAFT: ReviewDraft = {
   disposition: null,
-  followUpKinds: [],
   doseChanges: [],
   patientMessage: '',
   newMedications: [],
+  labOrders: [],
+  consultation: null,
   csInstructions: '',
   providerNote: '',
 }
@@ -209,13 +214,6 @@ export function parseDraft(json: unknown): ReviewDraft {
 
   const raw = json as Record<string, unknown>
 
-  const followUpKinds = Array.isArray(raw.followUpKinds)
-    ? (raw.followUpKinds.filter(
-        (k): k is FollowUpKind =>
-          typeof k === 'string' && (FOLLOW_UP_KINDS as readonly string[]).includes(k)
-      ) as FollowUpKind[])
-    : []
-
   // A draft written before the catalog picker existed has a typed name and a
   // typed dose, which reads back as a medication with no provenance and no sig —
   // exactly what it was.
@@ -228,15 +226,14 @@ export function parseDraft(json: unknown): ReviewDraft {
 
   return {
     disposition: isDisposition(raw.disposition) ? raw.disposition : null,
-    // Deduplicated: the checkbox group can only produce one of each, but a
-    // hand-edited or older payload can carry repeats.
-    followUpKinds: [...new Set(followUpKinds)],
     doseChanges: doseChangesFrom(raw),
     // `instructions` is what this field was called while it held dosing and
     // timing directions for the patient. It became the message they are sent,
     // which is the same text with a wider job, so an open draft keeps it.
     patientMessage: str(raw.patientMessage) || str(raw.instructions),
     newMedications,
+    labOrders: parseOrders(raw.labOrders),
+    consultation: parseConsultRequest(raw.consultation),
     csInstructions: str(raw.csInstructions),
     providerNote: providerNoteFrom(raw),
   }
@@ -247,9 +244,10 @@ export function parseDraft(json: unknown): ReviewDraft {
 export function isDraftEmpty(draft: ReviewDraft): boolean {
   return (
     draft.disposition === null &&
-    draft.followUpKinds.length === 0 &&
     draft.newMedications.every((m) => !m.name.trim() && !m.dose.trim() && !m.sig.trim()) &&
     draft.doseChanges.every((c) => !c.medication.trim() && !c.value.trim()) &&
+    draft.labOrders.length === 0 &&
+    draft.consultation === null &&
     !draft.patientMessage.trim() &&
     !draft.csInstructions.trim() &&
     !draft.providerNote.trim()

@@ -1,14 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
+import { EMPTY_ORDER } from '../labOrders/order.ts'
 import {
   ACTIVE_DISPOSITIONS,
   DISPOSITIONS,
   DISPOSITION_HINTS,
   DISPOSITION_LABELS,
   EMPTY_DRAFT,
-  FOLLOW_UP_KINDS,
-  FOLLOW_UP_LABELS,
   ONBOARDING_DISPOSITIONS,
   dispositionsFor,
   isDisposition,
@@ -26,7 +25,6 @@ test('a null or non-object draft column reads as empty', () => {
 test('a full draft round-trips', () => {
   const stored = {
     disposition: 'follow_up_needed',
-    followUpKinds: ['more_labs', 'patient_instructions'],
     doseChanges: [
       {
         medicationId: 4821,
@@ -45,11 +43,44 @@ test('a full draft round-trips', () => {
         sig: '',
       },
     ],
+    labOrders: [
+      {
+        timing: 'in_8_weeks',
+        customDate: '',
+        providerId: 'provider-uuid',
+        testCodes: ['cbc_85025', 'testosterone_total_84403'],
+        requiredCodes: ['cbc_85025'],
+        compedCodes: [],
+        diagnosisCodes: ['E29.1'],
+      },
+    ],
+    consultation: {
+      eventTypeId: '2d7a15dd-4c53-479b-b8ff-d26c508f4995',
+      message: 'Want to talk through the hematocrit first.',
+      bookingUrl: 'https://calendly.com/d/abc-def-ghi',
+      expiresAt: '2026-11-14T00:00:00Z',
+    },
     csInstructions: 'Book a phlebotomy',
     providerNote: 'Discussed with patient',
   }
 
   assert.deepEqual(parseDraft(stored), stored)
+})
+
+test('a consultation staged before links were minted keeps its type and no link', () => {
+  const draft = parseDraft({ consultation: { eventTypeId: 'f2d57860-5ffa-4439-b0c3-a5505fd60bb2' } })
+  assert.deepEqual(draft.consultation, {
+    eventTypeId: 'f2d57860-5ffa-4439-b0c3-a5505fd60bb2',
+    message: '',
+    bookingUrl: '',
+    expiresAt: null,
+  })
+})
+
+test('a consultation with no event type is not a staged consultation', () => {
+  assert.equal(parseDraft({ consultation: { message: 'Please book in.' } }).consultation, null)
+  assert.equal(parseDraft({ consultation: 'yes' }).consultation, null)
+  assert.equal(parseDraft({}).consultation, null)
 })
 
 test('a draft written when the patient message was called instructions still reads', () => {
@@ -93,21 +124,21 @@ test('an unknown disposition is dropped rather than trusted', () => {
   assert.equal(parseDraft({ disposition: 42 }).disposition, null)
 })
 
-test('unknown follow-up kinds are filtered out', () => {
-  assert.deepEqual(parseDraft({ followUpKinds: ['more_labs', 'nonsense'] }).followUpKinds, [
-    'more_labs',
-  ])
-})
+test('the retired follow-up checkboxes are dropped without taking the draft with them', () => {
+  // Four drafts were open in production with these ticked. Everything they
+  // asserted is recorded in a field of its own — the medication that was added,
+  // the message that was written — so the checkbox is the only thing lost.
+  const draft = parseDraft({
+    disposition: 'follow_up_needed',
+    followUpKinds: ['more_labs', 'new_medication'],
+    newMedications: [{ medicationId: 13, name: 'Anastrozole', dose: '0.5mg twice weekly' }],
+    csInstructions: 'Update the next shipment.',
+  })
 
-test('repeated follow-up kinds are deduplicated', () => {
-  assert.deepEqual(
-    parseDraft({ followUpKinds: ['more_labs', 'more_labs'] }).followUpKinds,
-    ['more_labs']
-  )
-})
-
-test('a non-array followUpKinds does not throw', () => {
-  assert.deepEqual(parseDraft({ followUpKinds: 'more_labs' }).followUpKinds, [])
+  assert.ok(!('followUpKinds' in draft))
+  assert.equal(draft.disposition, 'follow_up_needed')
+  assert.equal(draft.newMedications.length, 1)
+  assert.equal(draft.csInstructions, 'Update the next shipment.')
 })
 
 test('malformed medication rows are coerced, not dropped silently mid-array', () => {
@@ -231,7 +262,20 @@ test('any single filled field makes a draft worth saving', () => {
   assert.equal(isDraftEmpty({ ...EMPTY_DRAFT, csInstructions: 'x' }), false)
   assert.equal(isDraftEmpty({ ...EMPTY_DRAFT, providerNote: 'x' }), false)
   assert.equal(isDraftEmpty({ ...EMPTY_DRAFT, disposition: 'continue_protocol' }), false)
-  assert.equal(isDraftEmpty({ ...EMPTY_DRAFT, followUpKinds: ['more_labs'] }), false)
+})
+
+test('an attached lab order is worth saving', () => {
+  assert.equal(isDraftEmpty({ ...EMPTY_DRAFT, labOrders: [EMPTY_ORDER] }), false)
+})
+
+test('a staged consultation is worth saving', () => {
+  const consultation = {
+    eventTypeId: '2d7a15dd-4c53-479b-b8ff-d26c508f4995',
+    message: '',
+    bookingUrl: 'https://calendly.com/d/abc-def-ghi',
+    expiresAt: null,
+  }
+  assert.equal(isDraftEmpty({ ...EMPTY_DRAFT, consultation }), false)
 })
 
 test('whitespace alone is not worth saving', () => {
@@ -303,13 +347,10 @@ test('an unknown status is treated as onboarding, the safer default', () => {
   assert.deepEqual(dispositionsFor(null), ONBOARDING_DISPOSITIONS)
 })
 
-test('every disposition and follow-up kind has a label and hint', () => {
+test('every disposition has a label and hint', () => {
   for (const d of DISPOSITIONS) {
     assert.ok(DISPOSITION_LABELS[d].length > 0)
     assert.ok(DISPOSITION_HINTS[d].length > 0)
-  }
-  for (const k of FOLLOW_UP_KINDS) {
-    assert.ok(FOLLOW_UP_LABELS[k].length > 0)
   }
 })
 

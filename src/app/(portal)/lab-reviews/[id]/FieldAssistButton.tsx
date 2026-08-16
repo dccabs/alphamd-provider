@@ -12,8 +12,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { DictationTextarea } from '@/components/ui/dictation-textarea'
 import { Label } from '@/components/ui/label'
-import { Textarea } from '@/components/ui/textarea'
 import {
   FIELD_CONTRACT_NOTE,
   FIELD_LABELS,
@@ -245,13 +245,13 @@ export function FieldAssistButton({
                   >
                     WHAT SHOULD IT SAY
                   </Label>
-                  <Textarea
+                  <DictationTextarea
                     id={`assist-steer-${field}`}
                     rows={3}
                     autoFocus
                     placeholder={FIELD_STEER_PLACEHOLDERS[field]}
                     value={steer}
-                    onChange={(e) => setSteer(e.target.value)}
+                    onValueChange={setSteer}
                   />
                   <span className="text-xs text-muted-foreground">
                     {RECORDED_USE[field] === 'relay'
@@ -300,7 +300,7 @@ export function FieldAssistButton({
                   {/* One textarea for both states rather than a preview that
                       becomes an input: swapping elements at the end of the stream
                       loses the scroll position and the focus. */}
-                  <Textarea
+                  <DictationTextarea
                     id={`assist-draft-${field}`}
                     ref={draftBox}
                     rows={9}
@@ -309,7 +309,7 @@ export function FieldAssistButton({
                     placeholder={streaming ? 'Drafting…' : ''}
                     className="min-h-32 text-[13px] leading-relaxed"
                     value={draft}
-                    onChange={(e) => setDraft(e.target.value)}
+                    onValueChange={setDraft}
                   />
                   <span className="text-xs text-muted-foreground">
                     {streaming

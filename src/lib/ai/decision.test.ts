@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
+import { EMPTY_ORDER } from '../labOrders/order.ts'
 import { describeDecision, describeEscalation } from './decision.ts'
 import {
   EMPTY_DRAFT,
@@ -90,20 +91,88 @@ describe('describeDecision', () => {
     assert.doesNotMatch(described, / to \./)
   })
 
-  it('lists follow-up kinds and added medications', () => {
+  it('lists added medications', () => {
     const described = describeDecision(
       draft({
         disposition: 'follow_up_needed',
-        followUpKinds: ['more_labs', 'new_medication'],
         newMedications: [
           med({ medicationId: 29, name: 'Enclomiphene', dose: '12.5mg' }),
           med({ dose: 'ignored' }),
         ],
       })
     )
-    assert.match(described, /Needs more labs, Add a new medication/)
     assert.match(described, /Medication being added: Enclomiphene at 12\.5mg\./)
     assert.doesNotMatch(described, /ignored/)
+  })
+
+  it('hands over the labs being ordered, and when they go out', () => {
+    // The one decision the patient acts on themselves. Without it a message
+    // written for them cannot mention the draw that is coming.
+    const described = describeDecision(
+      draft({
+        disposition: 'follow_up_needed',
+        labOrders: [
+          {
+            ...EMPTY_ORDER,
+            timing: 'custom',
+            customDate: '2099-01-04',
+            providerId: 'provider-uuid',
+            testCodes: ['cbc_85025', 'testosterone_total_84403'],
+            diagnosisCodes: ['E29.1'],
+          },
+        ],
+      })
+    )
+
+    assert.match(
+      described,
+      /Labs being ordered — Jan 4, 2099 — CBC \(85025\), Testosterone, Total \(84403\)\./
+    )
+  })
+
+  it('hands over the consultation the patient is being asked to book', () => {
+    const described = describeDecision(
+      draft({
+        disposition: 'follow_up_needed',
+        consultation: {
+          eventTypeId: '2d7a15dd-4c53-479b-b8ff-d26c508f4995',
+          message: 'Want to talk through the hematocrit first.',
+          bookingUrl: 'https://calendly.com/d/abc-def-ghi',
+          expiresAt: null,
+        },
+      })
+    )
+
+    assert.match(
+      described,
+      /link to book a consultation — AlphaMD Provider, Secondary Follow-Up · 15 minutes\./
+    )
+    // Handed over separately: it is the provider's own words to the patient, and a
+    // message drafted for them should not contradict what the invitation says.
+    assert.match(described, /Want to talk through the hematocrit first\./)
+  })
+
+  it('tells the assistant not to write booking instructions, since they are appended', () => {
+    const described = describeDecision(
+      draft({
+        disposition: 'follow_up_needed',
+        consultation: {
+          eventTypeId: '2d7a15dd-4c53-479b-b8ff-d26c508f4995',
+          message: '',
+          bookingUrl: 'https://calendly.com/d/abc-def-ghi',
+          expiresAt: null,
+        },
+      })
+    )
+
+    assert.match(described, /Do not write booking instructions or a link\./)
+    // And never the link itself. It is minted before approval and shown to nobody;
+    // a model given it could put it in a draft the provider then sends early.
+    assert.ok(!described.includes('calendly.com'))
+  })
+
+  it('says nothing about a consultation when none was staged', () => {
+    assert.doesNotMatch(describeDecision(draft({ disposition: 'continue_protocol' })), /consultation/)
   })
 
   it('hands over the sig of an added medication rather than letting it be derived', () => {

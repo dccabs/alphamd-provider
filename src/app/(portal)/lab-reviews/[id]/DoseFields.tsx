@@ -1,8 +1,8 @@
 'use client'
 
+import { DictationTextarea } from '@/components/ui/dictation-textarea'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Textarea } from '@/components/ui/textarea'
 import { PERSONAL, type DoseSelection } from '@/lib/labReviews/doseSelection'
 import { INJECTION_FREQUENCIES, INJECTION_ROUTES, type Route } from '@/lib/labReviews/dosing'
 import type { DosageOption } from './types'
@@ -125,12 +125,12 @@ export function DoseFields({
           <Label htmlFor={`${idPrefix}-personal`} className="text-xs text-muted-foreground">
             {options.length > 0 ? 'Personal dose' : 'New dose'}
           </Label>
-          <Textarea
+          <DictationTextarea
             id={`${idPrefix}-personal`}
             rows={2}
             placeholder="Write the instruction out — e.g. Take 1/2 tablet (0.25mg) by mouth twice weekly"
             value={selection.personal}
-            onChange={(e) => set({ personal: e.target.value })}
+            onValueChange={(personal) => set({ personal })}
           />
         </div>
       )}
@@ -138,6 +138,6 @@ export function DoseFields({
   )
 }
 
-/** The house select, which has no primitive of its own — see `OrderLabsPanel`. */
+/** The house select, which has no primitive of its own — see `LabOrderDialog`. */
 export const SELECT_CLASS =
   'h-8 rounded-lg border border-input bg-transparent px-2 text-[13px] outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50'

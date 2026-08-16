@@ -32,8 +32,8 @@ import type { DosageOption, Medication } from './types'
  *
  * So the list is the input, and it is the *only* input: a medication the patient
  * is not already on cannot be reached from here, because starting one is not a
- * dose change. That is what the follow-up disposition's "Add a new medication" is
- * for. Every active prescription is shown with the dose it is on, in weekly
+ * dose change. That is what `NewMedicationPanel` is for. Every active
+ * prescription is shown with the dose it is on, in weekly
  * milligrams wherever that can be established from the sig, and choosing one
  * opens a dialog with the current figure already in front of the provider.
  *

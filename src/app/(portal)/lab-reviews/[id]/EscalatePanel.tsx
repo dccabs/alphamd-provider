@@ -3,8 +3,8 @@
 import { useState } from 'react'
 
 import { Button } from '@/components/ui/button'
+import { DictationTextarea } from '@/components/ui/dictation-textarea'
 import { Label } from '@/components/ui/label'
-import { Textarea } from '@/components/ui/textarea'
 import {
   EMPTY_ESCALATION,
   ESCALATION_TARGETS,
@@ -123,11 +123,11 @@ export function EscalatePanel({
         <Label htmlFor="escalate-note" className="text-xs text-muted-foreground">
           Why? Whoever picks this up sees this note.
         </Label>
-        <Textarea
+        <DictationTextarea
           id="escalate-note"
           rows={3}
           value={escalation.note}
-          onChange={(e) => setEscalation((prev) => ({ ...prev, note: e.target.value }))}
+          onValueChange={(note) => setEscalation((prev) => ({ ...prev, note }))}
           placeholder="Waiting on a repeat draw, need a second opinion on the Hct trend…"
         />
         {/* Told who the note is for, because a note to customer service and a note
