@@ -62,9 +62,33 @@ test('a full draft round-trips', () => {
     },
     csInstructions: 'Book a phlebotomy',
     providerNote: 'Discussed with patient',
+    skippedSteps: ['doseChanges'],
   }
 
   assert.deepEqual(parseDraft(stored), stored)
+})
+
+test('a skipped step survives the round trip, so a resumed review is not re-asked', () => {
+  const draft = parseDraft({ disposition: 'dose_change', skippedSteps: ['labOrders', 'consultation'] })
+  assert.deepEqual(draft.skippedSteps, ['labOrders', 'consultation'])
+})
+
+test('a step this build no longer knows about cannot settle anything', () => {
+  const draft = parseDraft({ skippedSteps: ['labOrders', 'concerns', 7, null] })
+  assert.deepEqual(draft.skippedSteps, ['labOrders'])
+})
+
+test('a draft saved before the flyout was stepped has no skips', () => {
+  assert.deepEqual(parseDraft({ disposition: 'dose_change' }).skippedSteps, [])
+  assert.deepEqual(parseDraft({ skippedSteps: 'labOrders' }).skippedSteps, [])
+})
+
+test('a skip alone cannot happen without a disposition, so emptiness ignores it', () => {
+  // No step is offered until a disposition is chosen, so this shape is unreachable
+  // from the UI. Pinned anyway: were it to occur, the draft would still be treated
+  // as empty rather than saved as a row that records nothing.
+  assert.ok(isDraftEmpty(parseDraft({ skippedSteps: ['labOrders'] })))
+  assert.ok(!isDraftEmpty(parseDraft({ disposition: 'dose_change', skippedSteps: ['labOrders'] })))
 })
 
 test('a consultation staged before links were minted keeps its type and no link', () => {

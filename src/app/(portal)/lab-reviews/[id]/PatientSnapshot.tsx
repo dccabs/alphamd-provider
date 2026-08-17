@@ -16,6 +16,7 @@ import {
   type Consultation,
 } from '@/lib/labReviews/consultations'
 import { shortDate, shortDateTime } from '@/lib/labReviews/format'
+import { expirationLabel, orderMedications } from '@/lib/labReviews/medications'
 import type { Medication, Order } from './types'
 
 /** Enough of an order to recognise it. A long one cannot be allowed to push the
@@ -157,19 +158,8 @@ function Nothing({ children }: { children: React.ReactNode }) {
 }
 
 /**
- * `patient_medications.expiration` is a text column, blank on 2,903 of 6,413 rows
- * and an ISO date on the rest. A row with nothing usable in it shows no date at
- * all rather than an em dash beside the word "Expires" — and it is the same
- * emptiness that made `getMedications` treat the medication as active.
- */
-function expirationLabel(expiration: string | null): string | null {
-  if (!expiration) return null
-  const date = new Date(expiration)
-  return Number.isNaN(date.getTime()) ? null : shortDate(expiration)
-}
-
-/**
- * Every medication, active ones first, each with the date it runs out.
+ * Every medication, active ones first and testosterone at the top, each with the
+ * date it runs out.
  *
  * Expired rows are dimmed *and* badged: dimming alone would make "no longer
  * taking this" a colour, which is exactly the distinction a provider cannot
@@ -180,9 +170,13 @@ function expirationLabel(expiration: string | null): string | null {
 function MedicationList({ medications }: { medications: Medication[] }) {
   if (!medications.length) return <Nothing>No medications on record.</Nothing>
 
-  // Sorted from a copy — the array belongs to the page above. `sort` is stable,
-  // so within each group the newest-first order from the query survives.
-  const ordered = [...medications].sort((a, b) => Number(b.active) - Number(a.active))
+  // `orderMedications` already sorts a copy, so the array above is left alone.
+  // Both sorts are stable and the outer one is applied last, so this reads as:
+  // active before expired, testosterone first within each, and the query's
+  // newest-first order surviving within that.
+  const ordered = orderMedications(medications).sort(
+    (a, b) => Number(b.active) - Number(a.active)
+  )
 
   return (
     <ul className="flex flex-col gap-1">
@@ -309,7 +303,7 @@ function HistoryDialog({
 }) {
   return (
     <Dialog open onOpenChange={(next) => !next && onClose()}>
-      <DialogContent className="max-h-[80dvh] w-full gap-0 overflow-y-auto p-0 sm:max-w-2xl">
+      <DialogContent className="max-h-[80dvh] w-full gap-0 overflow-y-auto p-0 sm:max-w-4xl">
         <DialogHeader className="px-5 pt-5 pb-4">
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>

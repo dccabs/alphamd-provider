@@ -143,7 +143,10 @@ export function LabOrderDialog({
 
   return (
     <Dialog open onOpenChange={(next) => !next && onCancel()}>
-      <DialogContent className="max-h-[90dvh] w-full gap-0 overflow-y-auto sm:max-w-2xl">
+      {/* 4xl, the cap shared by the content-heavy dialogs in the review. This is
+          the one that needs all of it: a two-column test list, a diagnosis list and
+          the orders the patient already has, on one screen. */}
+      <DialogContent className="max-h-[90dvh] w-full gap-0 overflow-y-auto sm:max-w-4xl">
         <DialogHeader className="pb-4 pr-8">
           <DialogTitle>{initial ? 'Edit the lab order' : 'Order labs'}</DialogTitle>
           <DialogDescription>
@@ -152,61 +155,69 @@ export function LabOrderDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex flex-col gap-4 border-t pt-4">
+        <div className="flex min-w-0 flex-col gap-4 border-t pt-4">
           {existing.length > 0 && (
-            <div className="flex flex-col gap-1.5">
+            <div className="flex min-w-0 flex-col gap-1.5">
               <span className="text-xs font-bold tracking-wider text-muted-foreground">
                 ALREADY ORDERED
               </span>
-              <ul className="flex flex-col divide-y rounded-lg border">
+              {/* Two lines rather than one wrapping row. A full panel is a dozen
+                  comma-joined test names, and on one line that list was the widest
+                  thing in the dialog — squeezing every other cell and pushing the
+                  row past the popup's edge. Given its own line it wraps and clamps,
+                  so the longest name in the catalog cannot widen the layout. */}
+              <ul className="flex min-w-0 flex-col divide-y rounded-lg border">
                 {existing.map((entry) => (
-                  <li key={entry.id} className="flex flex-wrap items-center gap-2 px-3 py-2">
-                    <span
-                      className={`rounded border px-1.5 py-px text-[9.5px] font-bold tracking-wider ${
-                        STATUS_TONE[entry.status] ?? STATUS_TONE.expired
-                      }`}
-                    >
-                      {(STATUS_LABELS[entry.status] ?? entry.status).toUpperCase()}
-                    </span>
-                    <span className="text-[13px] font-medium">
-                      {entry.scheduledDate ? shortDate(entry.scheduledDate) : 'No date'}
-                    </span>
-                    <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
-                      {entry.testNames.join(', ') || 'No tests recorded'}
-                    </span>
-                    {entry.status === 'pending' &&
-                      (confirmCancel === entry.id ? (
-                        <span className="flex items-center gap-1.5">
+                  <li key={entry.id} className="flex min-w-0 flex-col gap-1 px-3 py-2">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span
+                        className={`shrink-0 rounded border px-1.5 py-px text-[9.5px] font-bold tracking-wider ${
+                          STATUS_TONE[entry.status] ?? STATUS_TONE.expired
+                        }`}
+                      >
+                        {(STATUS_LABELS[entry.status] ?? entry.status).toUpperCase()}
+                      </span>
+                      <span className="text-[13px] font-medium">
+                        {entry.scheduledDate ? shortDate(entry.scheduledDate) : 'No date'}
+                      </span>
+                      {entry.status === 'pending' &&
+                        (confirmCancel === entry.id ? (
+                          <span className="ml-auto flex shrink-0 items-center gap-1.5">
+                            <Button
+                              variant="destructive"
+                              size="sm"
+                              disabled={cancelling}
+                              onClick={() => {
+                                setConfirmCancel(null)
+                                onCancelScheduled(entry.id)
+                              }}
+                            >
+                              Cancel it
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              disabled={cancelling}
+                              onClick={() => setConfirmCancel(null)}
+                            >
+                              Keep
+                            </Button>
+                          </span>
+                        ) : (
                           <Button
-                            variant="destructive"
-                            size="sm"
-                            disabled={cancelling}
-                            onClick={() => {
-                              setConfirmCancel(null)
-                              onCancelScheduled(entry.id)
-                            }}
-                          >
-                            Cancel it
-                          </Button>
-                          <Button
+                            className="ml-auto shrink-0"
                             variant="ghost"
                             size="sm"
                             disabled={cancelling}
-                            onClick={() => setConfirmCancel(null)}
+                            onClick={() => setConfirmCancel(entry.id)}
                           >
-                            Keep
+                            Cancel
                           </Button>
-                        </span>
-                      ) : (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          disabled={cancelling}
-                          onClick={() => setConfirmCancel(entry.id)}
-                        >
-                          Cancel
-                        </Button>
-                      ))}
+                        ))}
+                    </div>
+                    <span className="line-clamp-2 text-xs break-words text-muted-foreground">
+                      {entry.testNames.join(', ') || 'No tests recorded'}
+                    </span>
                   </li>
                 ))}
               </ul>

@@ -89,7 +89,12 @@ function DialogContent({
       <DialogPrimitive.Popup
         data-slot="dialog-content"
         className={cn(
-          "fixed z-50 grid w-full max-w-[calc(100%-2rem)] gap-4 rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
+          // `grid-cols-[minmax(0,1fr)]` rather than the implicit `auto` track. An
+          // auto track is sized by its content's minimum, so one unbreakable child
+          // — a long comma-joined list, a wide table — grows the popup past its own
+          // max-width instead of being clipped or wrapped inside it. Pinning the
+          // column to the container makes the max-width mean what it says.
+          "fixed z-50 grid w-full max-w-[calc(100%-2rem)] grid-cols-[minmax(0,1fr)] gap-4 rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
           SIDE_CLASSES[side],
           className
         )}

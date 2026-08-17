@@ -115,7 +115,7 @@ export function ConsultDialog({
 
   return (
     <Dialog open onOpenChange={(next) => !next && onCancel()}>
-      <DialogContent className="max-h-[90dvh] w-full gap-0 overflow-y-auto sm:max-w-xl">
+      <DialogContent className="max-h-[90dvh] w-full gap-0 overflow-y-auto sm:max-w-2xl">
         <DialogHeader className="pb-4 pr-8">
           <DialogTitle>
             {initial ? 'Edit the consultation request' : 'Request a consultation'}

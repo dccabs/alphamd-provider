@@ -2,6 +2,7 @@
 // `npm test`, which runs TypeScript through Node's type stripping.
 import { parseConsultRequest, type ConsultRequest } from '../consultations/request.ts'
 import { parseOrders, type LabOrder } from '../labOrders/order.ts'
+import { parseSkippedSteps, type ReviewStepId } from './reviewSteps.ts'
 
 /**
  * The shape of an in-progress lab review, and the vocabulary of dispositions it
@@ -133,6 +134,15 @@ export type ReviewDraft = {
   /** The provider's own half of the chart note. The generated half is composed at
    *  completion, not stored here. */
   providerNote: string
+  /**
+   * Steps the provider has said are not needed — see `reviewSteps.ts`.
+   *
+   * Stored rather than held in the component because the flyout is resumable by
+   * design: a provider who decides no labs are needed, closes the flyout and comes
+   * back should not be asked again. It records a decision, not a UI position,
+   * which is why it belongs in the draft alongside the decisions it sits between.
+   */
+  skippedSteps: ReviewStepId[]
 }
 
 export const EMPTY_DRAFT: ReviewDraft = {
@@ -144,6 +154,7 @@ export const EMPTY_DRAFT: ReviewDraft = {
   consultation: null,
   csInstructions: '',
   providerNote: '',
+  skippedSteps: [],
 }
 
 function str(value: unknown): string {
@@ -236,11 +247,22 @@ export function parseDraft(json: unknown): ReviewDraft {
     consultation: parseConsultRequest(raw.consultation),
     csInstructions: str(raw.csInstructions),
     providerNote: providerNoteFrom(raw),
+    // A draft saved before the flyout was stepped has none, which degrades the
+    // right way: whatever it already holds reads as settled, and anything empty is
+    // asked about once, rather than a half-written review finishing on silence.
+    skippedSteps: parseSkippedSteps(raw.skippedSteps),
   }
 }
 
-/** True when there is nothing worth saving. Keeps an autosave from writing a row
- *  just because the flyout was opened and closed. */
+/**
+ * True when there is nothing worth saving. Keeps an autosave from writing a row
+ * just because the flyout was opened and closed.
+ *
+ * `skippedSteps` is deliberately not tested. No step is offered until a
+ * disposition is chosen, so a draft carrying a skip carries a disposition too and
+ * is already not empty; testing it as well would only add a way for the two rules
+ * to drift apart.
+ */
 export function isDraftEmpty(draft: ReviewDraft): boolean {
   return (
     draft.disposition === null &&

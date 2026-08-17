@@ -24,6 +24,19 @@ import {
   type Disposition,
   type ReviewDraft,
 } from '@/lib/labReviews/reviewDraft'
+import {
+  STEP_SKIPPED_LABELS,
+  STEP_TITLES,
+  allSettled,
+  hasContent,
+  isSettled,
+  openStep,
+  stepSummary,
+  stepsFor,
+  withSkip,
+  withoutSkip,
+  type ReviewStepId,
+} from '@/lib/labReviews/reviewSteps'
 import type { LabProviderOption, ScheduledLabOrder } from '@/lib/labOrders/queries'
 import { describeDecision } from '@/lib/ai/decision'
 import { completeLabReviewAction, saveReviewDraftAction } from '../actions'
@@ -33,6 +46,7 @@ import { FieldAssistButton } from './FieldAssistButton'
 import { FinalizeSummaryDialog } from './FinalizeSummaryDialog'
 import { LabOrdersPanel } from './LabOrdersPanel'
 import { NewMedicationPanel } from './NewMedicationPanel'
+import { ReviewStep } from './ReviewStep'
 import type { CatalogMedication, DosageOption, Medication } from './types'
 
 /**
@@ -49,6 +63,21 @@ import type { CatalogMedication, DosageOption, Medication } from './types'
  * `dispositionsFor`. The provider does not get to choose between the onboarding
  * and active workflows, because the patient's situation decides which one is even
  * coherent.
+ *
+ * ## Worked through one step at a time
+ *
+ * The disposition comes first and nothing else exists until it is chosen: every
+ * step below depends on it, and the previous all-at-once form could offer a dose
+ * change to a patient with no protocol. After that, `reviewSteps.ts` decides which
+ * step is open, and each is settled either by recording something or by saying it
+ * is not needed. Settled steps collapse to a summary row, so by the end the flyout
+ * reads as a list of what the review decided.
+ *
+ * Whether every step has been settled gates the Finalize button here, and only
+ * here. `validateCompletion` is deliberately left alone: it is also the server's
+ * guard, and it is about whether the record will be *coherent* — a dose change
+ * under the wrong disposition — not about whether the provider has clicked past
+ * the labs step.
  */
 
 const DEBOUNCE_MS = 1200
@@ -151,6 +180,16 @@ export function ReviewModal({
   /** The confirmation summary, over the flyout. */
   const [summary, setSummary] = useState(false)
 
+  /**
+   * A settled step the provider has clicked back into, which wins over
+   * `openStep`.
+   *
+   * Held here rather than in the draft because it is a cursor, not a decision:
+   * where somebody is looking is not worth a round trip, and reopening the flyout
+   * on the first outstanding step is the right place to land anyway.
+   */
+  const [reopened, setReopened] = useState<ReviewStepId | null>(null)
+
   // The debounce timer and the close handler both need whatever the newest draft
   // is at the moment they run, not the one captured when they were created.
   const latest = useRef(initialDraft)
@@ -225,16 +264,50 @@ export function ReviewModal({
   }
 
   const options = dispositionsFor(patientStatus)
-  const showDose = draft.disposition === 'dose_change'
-  const showDoseChanges = showDose || draft.doseChanges.length > 0
-
-  // Continuing as designed is a statement that nothing is changing, so there is
-  // nothing to add. Medications added before the provider landed on it are still
-  // shown, because they are a decision that was made and hiding them would leave
-  // them on the record with no way to reach them — `validateCompletion` is what
-  // insists they be removed.
   const continuing = draft.disposition === 'continue_protocol'
-  const showNewMeds = !continuing || draft.newMedications.length > 0
+
+  const steps = stepsFor(draft)
+  /** Where the provider is: a step they clicked back into, or the first
+   *  outstanding one. A reopened step that has since been settled elsewhere is
+   *  ignored, so this can never point at a step that is no longer in the list. */
+  const current = reopened && steps.includes(reopened) ? reopened : openStep(draft)
+  const settled = allSettled(draft)
+
+  const stateOf = (step: ReviewStepId): 'hidden' | 'open' | 'settled' => {
+    if (!steps.includes(step)) return 'hidden'
+    if (step === current) return 'open'
+    return isSettled(step, draft) ? 'settled' : 'hidden'
+  }
+
+  /**
+   * Past the open step.
+   *
+   * An empty step records a skip, which is what makes "not needed" a decision
+   * rather than an omission. A step with something in it clears any skip it was
+   * carrying, so one that was skipped, then filled, then emptied again is asked
+   * about a second time instead of staying quietly settled.
+   *
+   * Reads the ref rather than `draft` for the same reason the autosave does: it is
+   * whatever the newest draft is at the moment the click lands.
+   */
+  const advance = (step: ReviewStepId) => {
+    const at = latest.current
+    update({ skippedSteps: hasContent(step, at) ? withoutSkip(at, step) : withSkip(at, step) })
+    setReopened(null)
+  }
+
+  /** The plain props every step shares, so the seven call sites below stay
+   *  readable. Handlers are passed separately, since a closure built per step in
+   *  here would be a function created during render that reaches a ref. */
+  const stepProps = (step: ReviewStepId) => ({
+    step,
+    title: STEP_TITLES[step],
+    state: stateOf(step),
+    summary: stepSummary(step, draft),
+    skippedLabel: STEP_SKIPPED_LABELS[step],
+    filled: hasContent(step, draft),
+    last: step === steps[steps.length - 1],
+  })
 
   return (
     // Base UI's Dialog as a right-hand sheet, which is what gives Escape to
@@ -287,7 +360,10 @@ export function ReviewModal({
 
         <SaveBanner state={save} onRetry={() => void persist()} />
 
-        <div className="flex flex-1 flex-col gap-5 overflow-y-auto px-5 py-4">
+        {/* Tighter than the gap the full-height sections wanted: most of what is on
+            screen now is one-line settled rows, and 20px between them reads as a
+            list of unrelated things rather than a review. */}
+        <div className="flex flex-1 flex-col gap-3 overflow-y-auto px-5 py-4">
           <fieldset className="flex flex-col gap-2">
             <legend className="text-xs font-bold tracking-wider text-muted-foreground">
               DISPOSITION
@@ -304,24 +380,24 @@ export function ReviewModal({
             </div>
           </fieldset>
 
-          {/* Stays on screen under another disposition while changes are still
+          {/* Stays in the list under another disposition while changes are still
               recorded, because completion refuses them there and this is the only
               place they can be removed. */}
-          {showDoseChanges && (
+          <ReviewStep {...stepProps('doseChanges')} onOpen={setReopened} onAdvance={advance}>
             <DoseChangePanel
               medications={medications}
               dosageOptions={dosageOptions}
               changes={draft.doseChanges}
-              canChange={showDose}
+              canChange={draft.disposition === 'dose_change'}
               onChange={(doseChanges) => update({ doseChanges })}
             />
-          )}
+          </ReviewStep>
 
           {/* Under every disposition but "continue protocol". Raising a dose and
               starting something new is one decision, and a provider who has
               picked "Dose change" still has to be able to record the second half
               of it. */}
-          {showNewMeds && (
+          <ReviewStep {...stepProps('newMedications')} onOpen={setReopened} onAdvance={advance}>
             <NewMedicationPanel
               catalog={catalog}
               medications={medications}
@@ -330,48 +406,49 @@ export function ReviewModal({
               canAdd={!continuing}
               onChange={(newMedications) => update({ newMedications })}
             />
-          )}
+          </ReviewStep>
 
           {/* Under every disposition, including "continue protocol": labs on an
               interval are how continuing as designed gets checked. */}
-          <LabOrdersPanel
-            patientState={patientState}
-            providers={labProviders}
-            scheduled={scheduledLabs}
-            orders={draft.labOrders}
-            cancelling={cancellingLabOrder}
-            onCancelScheduled={onCancelScheduledLab}
-            onChange={(labOrders) => update({ labOrders })}
-          />
+          <ReviewStep {...stepProps('labOrders')} onOpen={setReopened} onAdvance={advance}>
+            <LabOrdersPanel
+              patientState={patientState}
+              providers={labProviders}
+              scheduled={scheduledLabs}
+              orders={draft.labOrders}
+              cancelling={cancellingLabOrder}
+              onCancelScheduled={onCancelScheduledLab}
+              onChange={(labOrders) => update({ labOrders })}
+            />
+          </ReviewStep>
 
           {/* Also under every disposition, and next to the labs because the two
               are the same kind of decision: something the patient has to do,
               which the review sends them when it is approved. */}
-          <ConsultPanel
-            reviewId={reviewId}
-            patientEmail={patientEmail}
-            patientStatusId={patientStatusId}
-            patientGender={patientGender}
-            consultations={consultations}
-            request={draft.consultation}
-            onChange={(consultation) => update({ consultation })}
-          />
+          <ReviewStep {...stepProps('consultation')} onOpen={setReopened} onAdvance={advance}>
+            <ConsultPanel
+              reviewId={reviewId}
+              patientEmail={patientEmail}
+              patientStatusId={patientStatusId}
+              patientGender={patientGender}
+              consultations={consultations}
+              request={draft.consultation}
+              onChange={(consultation) => update({ consultation })}
+            />
+          </ReviewStep>
 
-          {/* The chart note comes first because the other two are written from it:
-              once the assessment exists, the patient message and the customer
-              service hand-off have something to relay. */}
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center justify-between gap-2">
-              <Label
-                htmlFor="provider-note"
-                className="text-xs font-bold tracking-wider text-muted-foreground"
-              >
-                NOTE FOR THE CHART
-              </Label>
-              {/* Only this half of the note is ever drafted: the structured half —
-                  the disposition, the doses, the medications added — is composed
-                  at completion, and is handed over as recorded context so the
-                  prose agrees with it. */}
+          {/* The chart note comes before the two messages because both are
+              written from it: once the assessment exists, the patient message and
+              the customer service hand-off have something to relay. */}
+          <ReviewStep
+            {...stepProps('providerNote')}
+            onOpen={setReopened}
+            onAdvance={advance}
+            // Only this half of the note is ever drafted: the structured half —
+            // the disposition, the doses, the medications added — is composed at
+            // completion, and is handed over as recorded context so the prose
+            // agrees with it.
+            action={
               <FieldAssistButton
                 field="providerNote"
                 value={draft.providerNote}
@@ -379,32 +456,60 @@ export function ReviewModal({
                 recorded={describeDecision(draft, { omit: 'providerNote' })}
                 disabled={finalizing}
               />
-            </div>
+            }
+          >
+            <Label htmlFor="provider-note" className="sr-only">
+              {STEP_TITLES.providerNote}
+            </Label>
             <DictationTextarea
               id="provider-note"
-              rows={4}
+              rows={5}
               placeholder="What you reviewed, what it showed, your assessment and the plan…"
               value={draft.providerNote}
               onValueChange={(providerNote) => update({ providerNote })}
             />
-          </div>
+          </ReviewStep>
 
-          {/* Always on screen, under every disposition. It used to appear only
-              when the follow-up checkbox asked for it, which made telling the
-              patient their labs were fine an opt-in — and a result nobody
-              communicated is the risk this whole review exists to close. */}
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center justify-between gap-2">
-              <Label
-                htmlFor="patient-message"
-                className="text-xs font-bold tracking-wider text-muted-foreground"
-              >
-                MESSAGE FOR PATIENT
-              </Label>
-              {/* The only field given the patient's name, because it is the only
-                  one addressed to them. The chart note and the customer service
-                  box are about the patient, and both read better as "the
-                  patient" than as a first name. */}
+          <ReviewStep
+            {...stepProps('csInstructions')}
+            onOpen={setReopened}
+            onAdvance={advance}
+            action={
+              <FieldAssistButton
+                field="csInstructions"
+                value={draft.csInstructions}
+                onChange={(csInstructions) => update({ csInstructions })}
+                recorded={describeDecision(draft, { omit: 'csInstructions' })}
+                disabled={finalizing}
+              />
+            }
+          >
+            <Label htmlFor="cs-instructions" className="sr-only">
+              {STEP_TITLES.csInstructions}
+            </Label>
+            <DictationTextarea
+              id="cs-instructions"
+              rows={4}
+              placeholder="What CS should relay or handle (shipment changes, scheduling, patient outreach)…"
+              value={draft.csInstructions}
+              onValueChange={(csInstructions) => update({ csInstructions })}
+            />
+          </ReviewStep>
+
+          {/* Last, and asked under every disposition. It used to appear only when
+              a follow-up checkbox asked for it, which made telling the patient
+              their labs were fine an opt-in — and a result nobody communicated is
+              the risk this whole review exists to close. Now it is the step the
+              review ends on, written once every other decision is made. */}
+          <ReviewStep
+            {...stepProps('patientMessage')}
+            onOpen={setReopened}
+            onAdvance={advance}
+            // The only field given the patient's name, because it is the only one
+            // addressed to them. The chart note and the customer service box are
+            // about the patient, and both read better as "the patient" than as a
+            // first name.
+            action={
               <FieldAssistButton
                 field="patientMessage"
                 value={draft.patientMessage}
@@ -413,40 +518,19 @@ export function ReviewModal({
                 firstName={patientFirstName}
                 disabled={finalizing}
               />
-            </div>
+            }
+          >
+            <Label htmlFor="patient-message" className="sr-only">
+              {STEP_TITLES.patientMessage}
+            </Label>
             <DictationTextarea
               id="patient-message"
-              rows={4}
+              rows={5}
               placeholder="What the patient is told — the result, what is changing, what they do next…"
               value={draft.patientMessage}
               onValueChange={(patientMessage) => update({ patientMessage })}
             />
-          </div>
-
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center justify-between gap-2">
-              <Label
-                htmlFor="cs-instructions"
-                className="text-xs font-bold tracking-wider text-muted-foreground"
-              >
-                INSTRUCTIONS FOR CUSTOMER SERVICE
-              </Label>
-              <FieldAssistButton
-                field="csInstructions"
-                value={draft.csInstructions}
-                onChange={(csInstructions) => update({ csInstructions })}
-                recorded={describeDecision(draft, { omit: 'csInstructions' })}
-                disabled={finalizing}
-              />
-            </div>
-            <DictationTextarea
-              id="cs-instructions"
-              rows={3}
-              placeholder="What CS should relay or handle (shipment changes, scheduling, patient outreach)…"
-              value={draft.csInstructions}
-              onValueChange={(csInstructions) => update({ csInstructions })}
-            />
-          </div>
+          </ReviewStep>
         </div>
 
         <div className="flex flex-col gap-2 border-t bg-muted/40 px-5 py-3.5">
@@ -457,13 +541,23 @@ export function ReviewModal({
               ))}
             </ul>
           )}
+          {/* Named rather than left as a disabled button with no explanation. The
+              outstanding step is usually on screen, but a provider who has
+              scrolled up to change the disposition cannot see it. */}
+          {problems.length === 0 && !settled && (
+            <p className="text-xs text-muted-foreground">
+              {current
+                ? `Still to do: ${STEP_TITLES[current].toLowerCase()}.`
+                : 'Choose a disposition to begin.'}
+            </p>
+          )}
           <div className="flex items-center justify-between gap-2.5">
             <Button variant="outline" onClick={close} disabled={finalizing}>
               Close
             </Button>
             <Button
               onClick={() => setSummary(true)}
-              disabled={finalizing || problems.length > 0}
+              disabled={finalizing || problems.length > 0 || !settled}
               title={problems.length ? problems.join(' ') : undefined}
             >
               {finalizing ? 'Finalizing…' : 'Finalize lab review'}

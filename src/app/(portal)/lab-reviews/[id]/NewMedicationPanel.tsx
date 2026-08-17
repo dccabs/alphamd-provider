@@ -76,19 +76,8 @@ export function NewMedicationPanel({
   }
 
   return (
+    // No heading: this sits inside a `ReviewStep`, which titles it.
     <div className="flex flex-col gap-2">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-xs font-bold tracking-wider text-muted-foreground">
-          NEW MEDICATIONS
-        </span>
-        {canAdd && (
-          <Button variant="outline" size="xs" onClick={() => setEditing('new')}>
-            <Plus />
-            Add medication to protocol
-          </Button>
-        )}
-      </div>
-
       {!canAdd && (
         <p className="text-xs text-amber-700">
           Continuing the protocol as designed cannot also start a medication. Remove it, or choose
@@ -113,6 +102,15 @@ export function NewMedicationPanel({
               onRemove={() => onChange(added.filter((_, i) => i !== index))}
             />
           ))}
+        </div>
+      )}
+
+      {canAdd && (
+        <div>
+          <Button variant="outline" size="xs" onClick={() => setEditing('new')}>
+            <Plus />
+            Add medication to protocol
+          </Button>
         </div>
       )}
 
@@ -223,7 +221,7 @@ function NewMedicationDialog({
 
   return (
     <Dialog open onOpenChange={(next) => !next && onCancel()}>
-      <DialogContent className="w-full gap-0 sm:max-w-lg">
+      <DialogContent className="w-full gap-0 sm:max-w-2xl">
         <DialogHeader className="pb-4">
           <DialogTitle>Add a medication to the protocol</DialogTitle>
           <DialogDescription>

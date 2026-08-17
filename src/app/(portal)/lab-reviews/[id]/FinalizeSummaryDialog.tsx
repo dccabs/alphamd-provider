@@ -91,7 +91,10 @@ export function FinalizeSummaryDialog({
 
   return (
     <Dialog open onOpenChange={(next) => !next && onEdit()}>
-      <DialogContent className="max-h-[90dvh] w-full gap-0 overflow-y-auto sm:max-w-2xl">
+      {/* 4xl, the same cap as every other dialog in the review. The blocks here are
+          long — a whole patient message, a whole chart note — and the width buys
+          fewer wrapped lines, so less of the screen is spent scrolling. */}
+      <DialogContent className="max-h-[90dvh] w-full gap-0 overflow-y-auto sm:max-w-4xl">
         <DialogHeader className="pb-4 pr-8">
           <DialogTitle>Before you finish — {patientName}</DialogTitle>
           <DialogDescription>

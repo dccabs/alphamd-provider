@@ -57,17 +57,8 @@ export function LabOrdersPanel({
   const pending = scheduled.filter((entry) => entry.status === 'pending')
 
   return (
+    // No heading: this sits inside a `ReviewStep`, which titles it.
     <div className="flex flex-col gap-2">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-xs font-bold tracking-wider text-muted-foreground">
-          LABS TO ORDER
-        </span>
-        <Button variant="outline" size="xs" onClick={() => setEditing('new')}>
-          <Plus />
-          Order labs
-        </Button>
-      </div>
-
       {orders.length === 0 ? (
         <p className="rounded-lg border border-dashed px-3 py-2.5 text-xs text-muted-foreground">
           No labs ordered in this review.
@@ -89,6 +80,13 @@ export function LabOrdersPanel({
           </p>
         </div>
       )}
+
+      <div>
+        <Button variant="outline" size="xs" onClick={() => setEditing('new')}>
+          <Plus />
+          {orders.length === 0 ? 'Order labs' : 'Order more labs'}
+        </Button>
+      </div>
 
       {/* Named here as well as in the dialog: a provider who never opens the
           dialog would otherwise order a second draw without knowing about the

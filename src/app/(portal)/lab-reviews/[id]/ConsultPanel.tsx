@@ -47,23 +47,8 @@ export function ConsultPanel({
   const upcoming = upcomingCount(consultations)
 
   return (
+    // No heading: this sits inside a `ReviewStep`, which titles it.
     <div className="flex flex-col gap-2">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-xs font-bold tracking-wider text-muted-foreground">CONSULTATION</span>
-        {!request && (
-          <Button
-            variant="outline"
-            size="xs"
-            disabled={!patientEmail}
-            title={patientEmail ? undefined : 'This patient has no email address on file.'}
-            onClick={() => setEditing(true)}
-          >
-            <CalendarPlus />
-            Request a consultation
-          </Button>
-        )}
-      </div>
-
       {request ? (
         <div className="flex flex-col gap-1.5">
           <div className="flex items-start justify-between gap-2 rounded-lg border border-green-600 bg-green-50 px-3 py-2.5">
@@ -97,6 +82,21 @@ export function ConsultPanel({
             ? 'The patient is not being asked to book a consultation.'
             : 'This patient has no email address on file, so an invitation cannot be sent.'}
         </p>
+      )}
+
+      {!request && (
+        <div>
+          <Button
+            variant="outline"
+            size="xs"
+            disabled={!patientEmail}
+            title={patientEmail ? undefined : 'This patient has no email address on file.'}
+            onClick={() => setEditing(true)}
+          >
+            <CalendarPlus />
+            Request a consultation
+          </Button>
+        </div>
       )}
 
       {/* Named here as well as in the dialog: a provider who never opens the dialog

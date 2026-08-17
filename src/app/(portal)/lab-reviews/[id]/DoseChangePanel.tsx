@@ -18,6 +18,7 @@ import {
   type DoseSelection,
 } from '@/lib/labReviews/doseSelection'
 import { readDose, weeklyMgLabel, type CurrentDose } from '@/lib/labReviews/dosing'
+import { expirationLabel, expiryStatus, orderMedications } from '@/lib/labReviews/medications'
 import type { DoseChange } from '@/lib/labReviews/reviewDraft'
 import { DoseFields } from './DoseFields'
 import type { DosageOption, Medication } from './types'
@@ -82,7 +83,9 @@ export function DoseChangePanel({
   const active = medications.filter((med) => med.active)
 
   const changed = new Set(changes.map((change) => change.medicationId))
-  const available = active.filter((med) => !changed.has(med.id))
+  // Testosterone first, because it is the protocol nearly every review is about
+  // and the reason the provider opened this panel.
+  const available = orderMedications(active.filter((med) => !changed.has(med.id)))
 
   /** Keyed on the prescription rather than on a row index, so reopening a
    *  medication replaces its change instead of adding a second one. */
@@ -93,9 +96,8 @@ export function DoseChangePanel({
   }
 
   return (
+    // No heading: this sits inside a `ReviewStep`, which titles it.
     <div className="flex flex-col gap-2">
-      <span className="text-xs font-bold tracking-wider text-muted-foreground">DOSE CHANGES</span>
-
       {changes.length > 0 && (
         <div className="flex flex-col gap-1.5">
           {changes.map((change, index) => (
@@ -154,10 +156,12 @@ export function DoseChangePanel({
   )
 }
 
-/** One prescription, with what it is dosed at. The dose is the reason to pick a
- *  row, so it is on the row rather than behind the click. */
+/** One prescription, with what it is dosed at and when it runs out. Both are
+ *  reasons to pick a row, so both are on the row rather than behind the click. */
 function MedicationChoice({ med, onSelect }: { med: Medication; onSelect: () => void }) {
   const dose = readDose(med)
+  const expires = expirationLabel(med.expiration)
+  const status = expiryStatus(med.expiration)
 
   return (
     <button
@@ -171,7 +175,24 @@ function MedicationChoice({ med, onSelect }: { med: Medication; onSelect: () => 
           <span className="shrink-0 text-xs font-semibold">{weeklyMgLabel(dose.weeklyMg)}</span>
         )}
       </span>
-      <span className="text-xs text-muted-foreground">{dose.text || 'No dose recorded'}</span>
+      <span className="flex flex-wrap items-baseline gap-x-2">
+        <span className="text-xs text-muted-foreground">{dose.text || 'No dose recorded'}</span>
+        {/* A prescription about to lapse changes what a dose change means: the
+            new sig has to reach the pharmacy before the refill does. Green and
+            red carry it, and the date is written out either way so the colour is
+            never the only thing saying it. Rows with nothing readable in the
+            column — over a third of them — show no date at all rather than
+            guessing. */}
+        {expires && (
+          <span
+            className={`shrink-0 text-xs font-medium ${
+              status === 'past' ? 'text-red-600' : 'text-green-700'
+            }`}
+          >
+            {status === 'past' ? `Expired ${expires}` : `Expires ${expires}`}
+          </span>
+        )}
+      </span>
     </button>
   )
 }
@@ -288,7 +309,7 @@ function DoseChangeDialog({
 
   return (
     <Dialog open onOpenChange={(next) => !next && onCancel()}>
-      <DialogContent className="w-full gap-0 sm:max-w-lg">
+      <DialogContent className="w-full gap-0 sm:max-w-2xl">
         <DialogHeader className="pb-4">
           <DialogTitle>{med.name}</DialogTitle>
           <DialogDescription>

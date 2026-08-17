@@ -206,7 +206,7 @@ export function FieldAssistButton({
         aria-label={`Draft ${label.toLowerCase()} with AI`}
       >
         <SparklesIcon />
-        AI draft
+        Use AI
       </Button>
 
       <Dialog
@@ -215,7 +215,7 @@ export function FieldAssistButton({
           if (!next) close()
         }}
       >
-        <DialogContent className="max-h-[90dvh] w-full gap-0 overflow-y-auto sm:max-w-xl">
+        <DialogContent className="max-h-[90dvh] w-full gap-0 overflow-y-auto sm:max-w-4xl">
           <DialogHeader className="pb-4 pr-8">
             <DialogTitle>{label}</DialogTitle>
             <DialogDescription>{FIELD_CONTRACT_NOTE}</DialogDescription>
