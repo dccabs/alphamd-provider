@@ -209,7 +209,13 @@ function NewMedicationDialog({
 
   const pending: DraftMedication | null =
     chosen && dose
-      ? { medicationId: chosen.id, name: chosen.name, dose: dose.value, sig: dose.sig }
+      ? {
+          medicationId: chosen.id,
+          name: chosen.name,
+          dose: dose.value,
+          sig: dose.sig,
+          dosageMg: dose.weeklyMg,
+        }
       : null
 
   const lines = pending ? newMedicationLines(pending) : null

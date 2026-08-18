@@ -24,6 +24,8 @@ test('a calculated dose becomes a level and the instruction it works out to', ()
   assert.deepEqual(selectionValue(selection, { calculated: true, options: [] }), {
     value: '140mg/week',
     sig: 'Inject .35mL subcutaneously every 3.5 days.',
+    // Carried as a number, because a protocol built on this dose is priced on it.
+    weeklyMg: 140,
   })
 })
 
@@ -41,6 +43,8 @@ test('a catalog dose is recorded as written, with no generated instruction', () 
   assert.deepEqual(selectionValue(selection, { calculated: false, options: OPTIONS }), {
     value: '1.00mg - Take 1 tablet by mouth twice weekly.',
     sig: '',
+    // Not dosed in weekly milligrams, so there is no figure to price a surcharge on.
+    weeklyMg: null,
   })
 })
 
@@ -55,6 +59,7 @@ test('a typed dose is read when it is chosen, and when there is nothing to choos
   assert.deepEqual(selectionValue(typed, { calculated: false, options: OPTIONS }), {
     value: '2mg PO daily',
     sig: '',
+    weeklyMg: null,
   })
 
   // `Other` has no catalog doses at all, so the field is the only input and is
@@ -63,6 +68,7 @@ test('a typed dose is read when it is chosen, and when there is nothing to choos
   assert.deepEqual(selectionValue(only, { calculated: false, options: [] }), {
     value: '2mg PO daily',
     sig: '',
+    weeklyMg: null,
   })
 })
 

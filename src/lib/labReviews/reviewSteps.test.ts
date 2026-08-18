@@ -46,6 +46,7 @@ const med = (patch: Partial<DraftMedication> = {}): DraftMedication => ({
   name: '',
   dose: '',
   sig: '',
+  dosageMg: null,
   ...patch,
 })
 

@@ -41,6 +41,7 @@ test('a full draft round-trips', () => {
         name: 'Anastrozole',
         dose: '1.00mg - Take 1/2 tablet (0.50mg) by mouth twice weekly.',
         sig: '',
+        dosageMg: null,
       },
     ],
     labOrders: [
@@ -169,18 +170,34 @@ test('malformed medication rows are coerced, not dropped silently mid-array', ()
   assert.deepEqual(
     parseDraft({ newMedications: [{ name: 'A' }, null, { dose: 5 }] }).newMedications,
     [
-      { medicationId: null, name: 'A', dose: '', sig: '' },
-      { medicationId: null, name: '', dose: '', sig: '' },
+      { medicationId: null, name: 'A', dose: '', sig: '', dosageMg: null },
+      { medicationId: null, name: '', dose: '', sig: '', dosageMg: null },
     ]
   )
 })
 
+test('a dose figure is only kept if it could be a dose', () => {
+  const mg = (dosageMg: unknown) =>
+    parseDraft({ newMedications: [{ name: 'A', dosageMg }] }).newMedications[0].dosageMg
+
+  assert.equal(mg(160), 160)
+  // Fractional doses are real — 12.5mg of enclomiphene — so this is not rounded
+  // or rejected the way a row id is.
+  assert.equal(mg(12.5), 12.5)
+  assert.equal(mg('160'), null)
+  assert.equal(mg(0), null)
+  assert.equal(mg(-160), null)
+  assert.equal(mg(Number.NaN), null)
+  assert.equal(mg(Number.POSITIVE_INFINITY), null)
+})
+
 test('a medication added before the catalog picker keeps its typed name and dose', () => {
   // What autosave stored when a new medication was two free-text inputs: no
-  // catalog row behind the name, and no generated instruction.
+  // catalog row behind the name, no generated instruction, and no figure a
+  // protocol could be priced on.
   assert.deepEqual(
     parseDraft({ newMedications: [{ name: 'Vitamin D', dose: '5000 IU daily' }] }).newMedications,
-    [{ medicationId: null, name: 'Vitamin D', dose: '5000 IU daily', sig: '' }]
+    [{ medicationId: null, name: 'Vitamin D', dose: '5000 IU daily', sig: '', dosageMg: null }]
   )
 })
 
@@ -310,7 +327,7 @@ test('a blank medication row added and not filled in is not worth saving', () =>
   assert.ok(
     isDraftEmpty({
       ...EMPTY_DRAFT,
-      newMedications: [{ medicationId: null, name: '', dose: '', sig: '' }],
+      newMedications: [{ medicationId: null, name: '', dose: '', sig: '', dosageMg: null }],
     })
   )
 })
@@ -338,7 +355,13 @@ test('an added medication is worth saving', () => {
     isDraftEmpty({
       ...EMPTY_DRAFT,
       newMedications: [
-        { medicationId: 1, name: 'Testosterone cypionate', dose: '160mg/week', sig: '' },
+        {
+          medicationId: 1,
+          name: 'Testosterone cypionate',
+          dose: '160mg/week',
+          sig: '',
+          dosageMg: 160,
+        },
       ],
     }),
     false

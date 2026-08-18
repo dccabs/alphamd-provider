@@ -4,7 +4,12 @@ import test from 'node:test'
 import type { ConsultRequest } from '../consultations/request.ts'
 import { EMPTY_ORDER, type LabOrder } from '../labOrders/order.ts'
 import { FLAG, FLAG_LABELS, PATIENT_STATUS, PATIENT_STATUS_LABELS } from './clinicalIds.ts'
-import { planCompletion, reviewAudiences, validateCompletion } from './completion.ts'
+import {
+  planCompletion,
+  reviewAudiences,
+  validateCompletion,
+  type ProtocolOutcome,
+} from './completion.ts'
 import {
   DISPOSITIONS,
   EMPTY_DRAFT,
@@ -42,6 +47,7 @@ const med = (patch: Partial<DraftMedication> = {}): DraftMedication => ({
   name: '',
   dose: '',
   sig: '',
+  dosageMg: null,
   ...patch,
 })
 
@@ -420,6 +426,7 @@ test('the detail keeps the catalog row and the sig behind each added medication'
           name: 'Testosterone cypionate',
           dose: '160mg/week',
           sig: 'Inject .4mL subcutaneously every 3.5 days.',
+          dosageMg: 160,
         }),
         med({ name: 'Vitamin D', dose: '5000 IU daily' }),
       ],
@@ -433,9 +440,12 @@ test('the detail keeps the catalog row and the sig behind each added medication'
       name: 'Testosterone cypionate',
       dose: '160mg/week',
       sig: 'Inject .4mL subcutaneously every 3.5 days.',
+      // The figure the quote is priced on, kept beside the string it is displayed as.
+      dosageMg: 160,
     },
-    // Typed into an older draft, so there is no catalog row and no instruction.
-    { medicationId: null, name: 'Vitamin D', dose: '5000 IU daily', sig: null },
+    // Typed into an older draft, so there is no catalog row, no instruction and no
+    // figure to price against.
+    { medicationId: null, name: 'Vitamin D', dose: '5000 IU daily', sig: null, dosageMg: null },
   ])
 })
 
@@ -889,6 +899,90 @@ test('every flag and status a completion can touch has a label to show', () => {
     if (plan.patientStatusId !== null) {
       assert.ok(PATIENT_STATUS_LABELS[plan.patientStatusId], `status ${plan.patientStatusId}`)
     }
+  }
+})
+
+/**
+ * The recommended protocol, as far as the text is concerned.
+ *
+ * `protocols/protocolPlan.ts` decides what these values are; here the only
+ * question is whether the three readers are told the right thing about them.
+ */
+
+const QUOTE: ProtocolOutcome = {
+  kind: 'quote',
+  lines: ['Testosterone Cypionate', 'Base Price: $129.00/mo', 'Subscription Total: $137.39'],
+  total: '$137.39',
+  caveat: 'Quoted at list price with no discounts applied.',
+}
+
+const HANDED_OFF: ProtocolOutcome = {
+  kind: 'handed-off',
+  reasons: ['Sermorelin (300mcg) — more than one product matches; pick one.'],
+}
+
+test('a quote is stated once on the chart, without the breakdown', () => {
+  // `sendProtocol` writes a second note carrying the full pricing. Two versions of
+  // one price on a chart is how they come to disagree.
+  const note = planCompletion(full, 'Dr Smith', QUOTE).note
+
+  assert.match(note, /Recommended protocol sent — \$137\.39 due today\./)
+  assert.match(note, /Quoted at list price/)
+  assert.equal(note.includes('Base Price: $129.00/mo'), false)
+})
+
+test('customer service is told a quote needs nothing from them, and why to expect a call', () => {
+  const audiences = reviewAudiences(full, 'Dr Smith', QUOTE)
+
+  assert.match(audiences.customerService, /the patient is emailed a quote for \$137\.39 due today/)
+  assert.match(audiences.customerService, /nothing to do here unless they ask/)
+  assert.match(audiences.customerService, /Quoted at list price/)
+})
+
+test('a handoff is a task, and reads as one', () => {
+  const audiences = reviewAudiences(full, 'Dr Smith', HANDED_OFF)
+
+  assert.match(audiences.customerService, /price this one by hand and send it/)
+  assert.match(audiences.customerService, /more than one product matches/)
+
+  assert.match(audiences.chart, /A recommended protocol was not sent/)
+  assert.match(audiences.chart, /more than one product matches/)
+})
+
+test('a handoff never claims a price went out', () => {
+  const audiences = reviewAudiences(full, 'Dr Smith', HANDED_OFF)
+
+  assert.equal(audiences.chart.includes('protocol sent'), false)
+  assert.equal(audiences.patient.includes('protocol'), false)
+})
+
+test('the patient hears nothing about the protocol here — the quote is its own email', () => {
+  // Deliberate, and the same as the admin app: the provider's message is about the
+  // labs, and the quote arrives with its own subject line and its own call to
+  // action.
+  const untouched = reviewAudiences(full, 'Dr Smith').patient
+
+  for (const outcome of [QUOTE, HANDED_OFF]) {
+    assert.equal(reviewAudiences(full, 'Dr Smith', outcome).patient, untouched)
+  }
+})
+
+test('a review that sends no protocol reads exactly as it did before quoting existed', () => {
+  assert.equal(
+    reviewAudiences(full, 'Dr Smith', null).chart,
+    reviewAudiences(full, 'Dr Smith').chart
+  )
+})
+
+test('the customer service text the summary shows is still the text the note carries', () => {
+  // The invariant from above, re-checked with a quote in play: the protocol lines
+  // go through the same composition rather than being appended for display.
+  for (const outcome of [QUOTE, HANDED_OFF, null]) {
+    const audiences = reviewAudiences(full, 'Dr Smith', outcome)
+    const note = planCompletion(full, 'Dr Smith', outcome).note
+
+    assert.ok(note.includes(`For customer service: ${audiences.customerService}`))
+    assert.equal(audiences.chart, note)
   }
 })
 

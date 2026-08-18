@@ -31,6 +31,9 @@ export const LAB_REVIEW_EVENT_TYPES = [
   'labs_ordered',
   'labs_order_cancelled',
   'consultation_requested',
+  'protocol_sent',
+  /** A protocol that could not be priced automatically and went to staff. */
+  'protocol_handed_off',
 ] as const
 
 export type LabReviewEventType = (typeof LAB_REVIEW_EVENT_TYPES)[number]

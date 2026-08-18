@@ -99,6 +99,18 @@ export type DraftMedication = {
   name: string
   dose: string
   sig: string
+  /**
+   * Weekly milligrams, when this is a medication dosed that way.
+   *
+   * Stored beside `dose` rather than derived from it because approving the review
+   * quotes the patient a price, and the injectables carry a surcharge above 200mg
+   * a week. A number that a patient is billed against must be the one the provider
+   * chose, not one recovered from the string it was displayed as.
+   *
+   * Null for everything not dosed in weekly milligrams — every tablet and cream,
+   * which carry no surcharge — and for a draft saved before this field existed.
+   */
+  dosageMg: number | null
 }
 
 /**
@@ -167,6 +179,12 @@ function rowId(value: unknown): number | null {
   return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : null
 }
 
+/** A dose in milligrams, or null. Fractional — 12.5mg is a real dose — but never
+ *  NaN, Infinity or negative, because this one is multiplied into a price. */
+function milligrams(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null
+}
+
 function rows(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value)
     ? value.filter((row): row is Record<string, unknown> => !!row && typeof row === 'object')
@@ -228,11 +246,15 @@ export function parseDraft(json: unknown): ReviewDraft {
   // A draft written before the catalog picker existed has a typed name and a
   // typed dose, which reads back as a medication with no provenance and no sig —
   // exactly what it was.
+  // A draft written before the dose figure was captured reads back with a null,
+  // which is the honest answer: the provider's number is not recoverable, and a
+  // null makes the medication unpriceable rather than mispriced.
   const newMedications = rows(raw.newMedications).map((m) => ({
     medicationId: rowId(m.medicationId),
     name: str(m.name),
     dose: str(m.dose),
     sig: str(m.sig),
+    dosageMg: milligrams(m.dosageMg),
   }))
 
   return {

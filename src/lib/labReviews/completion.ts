@@ -52,6 +52,9 @@ export type DispositionDetail = {
     name: string
     dose: string
     sig: string | null
+    /** The figure the protocol was priced on, when there was one. Recorded here
+     *  because the quote the patient receives is derived from it. */
+    dosageMg: number | null
   }[]
   /** The orders placed at completion, as composed. Kept whole rather than
    *  summarised: `scheduled_lab_requisitions` records what was sent, and this
@@ -68,6 +71,34 @@ export type DispositionDetail = {
   patientMessage: string | null
   csInstructions: string | null
 }
+
+/**
+ * What sending the recommended protocol came to, as far as the review's text is
+ * concerned.
+ *
+ * A deliberately thin type, declared here rather than imported from
+ * `lib/protocols`, so this module stays pure and stays ignorant of the pricing
+ * catalog. `protocolOutcome` in `protocols/protocolPlan.ts` produces it; the two
+ * callers are the server that sends the protocol and the confirmation screen that
+ * previews it, and both hand the same value in so the preview and the record
+ * cannot disagree.
+ *
+ * Its presence is what tells the note that a price went out. Without it every
+ * added medication would have to be described as though pricing were somebody
+ * else's problem, which was true until it wasn't.
+ */
+export type ProtocolOutcome =
+  | {
+      kind: 'quote'
+      /** The breakdown the patient is emailed, line for line. */
+      lines: string[]
+      /** Formatted, e.g. `$137.39`. */
+      total: string
+      /** The one caveat every quote from this portal carries. */
+      caveat: string
+    }
+  /** Nothing was sent; a human prices it. The reasons are written for that human. */
+  | { kind: 'handed-off'; reasons: string[] }
 
 export type CompletionPlan = {
   /** One line for `lab_reviews.resolution`, which the queue already displays. */
@@ -278,7 +309,7 @@ function doseChangesFor(draft: ReviewDraft) {
  * Comes back empty when nobody downstream has to act, so callers can drop the
  * header rather than emit one with nothing under it.
  */
-function customerServiceBlock(draft: ReviewDraft): string {
+function customerServiceBlock(draft: ReviewDraft, protocol: ProtocolOutcome | null): string {
   const changes = doseChangesFor(draft)
     .map(doseChangeLines)
     .filter((change) => change !== null)
@@ -289,6 +320,7 @@ function customerServiceBlock(draft: ReviewDraft): string {
   return [
     ...changes.map((change) => change.cs),
     ...added.map((medication) => medication.cs),
+    ...protocolInstructions(protocol),
     // Nothing for customer service to do, but they are who the patient asks when
     // an order email arrives, so they are told it is coming.
     ...draft.labOrders.map((order) => `Labs ordered — ${orderLine(order)}`),
@@ -304,6 +336,33 @@ function customerServiceBlock(draft: ReviewDraft): string {
   ]
     .filter(Boolean)
     .join('\n')
+}
+
+/**
+ * What customer service has to know about the money.
+ *
+ * A quote is *not* an action for them — the patient approves and pays on their own
+ * protocol page — but it is the thing the patient rings about, so it is stated
+ * along with the caveat that would otherwise cost them a refund conversation.
+ *
+ * A handoff is the opposite: a real task, and the only reason the medication ever
+ * reaches a shipment. It leads with the imperative for that reason.
+ */
+function protocolInstructions(protocol: ProtocolOutcome | null): string[] {
+  if (!protocol) return []
+
+  if (protocol.kind === 'handed-off') {
+    return [
+      [
+        'Recommended protocol — price this one by hand and send it; it could not be priced automatically:',
+        ...protocol.reasons.map((reason) => `  ${reason}`),
+      ].join('\n'),
+    ]
+  }
+
+  return [
+    `Recommended protocol — the patient is emailed a quote for ${protocol.total} due today. They approve and pay on their protocol page, and it ships after that; nothing to do here unless they ask. ${protocol.caveat}`,
+  ]
 }
 
 /**
@@ -328,11 +387,15 @@ export type ReviewAudiences = {
   chart: string
 }
 
-export function reviewAudiences(draft: ReviewDraft, providerName: string): ReviewAudiences {
+export function reviewAudiences(
+  draft: ReviewDraft,
+  providerName: string,
+  protocol: ProtocolOutcome | null = null
+): ReviewAudiences {
   return {
     patient: patientText(draft),
-    customerService: customerServiceBlock(draft),
-    chart: planCompletion(draft, providerName).note,
+    customerService: customerServiceBlock(draft, protocol),
+    chart: planCompletion(draft, providerName, protocol).note,
   }
 }
 
@@ -360,7 +423,11 @@ function patientText(draft: ReviewDraft): string {
   return written ? `${written}\n\n${booking}` : booking
 }
 
-export function planCompletion(draft: ReviewDraft, providerName: string): CompletionPlan {
+export function planCompletion(
+  draft: ReviewDraft,
+  providerName: string,
+  protocol: ProtocolOutcome | null = null
+): CompletionPlan {
   const disposition = draft.disposition
   if (!disposition) {
     throw new Error('planCompletion called without a disposition; validate first')
@@ -392,10 +459,11 @@ export function planCompletion(draft: ReviewDraft, providerName: string): Comple
       break
 
     case 'treatment_recommended':
-      // Deliberately *not* set to "Pricing sent to PT". Recommending treatment is
-      // not the same as having sent pricing, and the pricing tool does not live
-      // here yet — moving the patient to status 25 would assert something that has
-      // not happened. The follow-up flag is what gets pricing sent.
+      // Deliberately *not* set to "Pricing sent to PT", even now that this portal
+      // can send pricing. Recommending treatment is not the same as having sent a
+      // quote, and whether one goes out depends on whether it could be priced —
+      // which this pure function has no way of knowing. `sendProtocol` sets the
+      // status itself, once a quote is actually in the patient's inbox.
       addFlagIds.push(FLAG.followUpRequired)
       break
   }
@@ -431,7 +499,22 @@ export function planCompletion(draft: ReviewDraft, providerName: string): Comple
 
   for (const medication of added) lines.push(medication.chart)
 
-  const customerService = customerServiceBlock(draft)
+  // One line, not the breakdown. `sendProtocol` writes a second note carrying the
+  // full pricing and a link to the stored quote, and repeating it here would put
+  // two versions of a price on one chart.
+  if (protocol?.kind === 'quote') {
+    lines.push(`Recommended protocol sent — ${protocol.total} due today. ${protocol.caveat}`)
+  }
+  if (protocol?.kind === 'handed-off') {
+    lines.push(
+      [
+        'A recommended protocol was not sent: it could not be priced automatically.',
+        ...protocol.reasons.map((reason) => `  ${reason}`),
+      ].join('\n')
+    )
+  }
+
+  const customerService = customerServiceBlock(draft, protocol)
   if (customerService) lines.push(`For customer service: ${customerService}`)
 
   if (draft.providerNote.trim()) lines.push(draft.providerNote.trim())
@@ -453,6 +536,7 @@ export function planCompletion(draft: ReviewDraft, providerName: string): Comple
         name: m.name.trim(),
         dose: m.dose.trim(),
         sig: m.sig.trim() || null,
+        dosageMg: m.dosageMg,
       })),
       labOrders: draft.labOrders,
       consultation: draft.consultation && {

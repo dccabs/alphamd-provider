@@ -12,9 +12,12 @@ import {
   saveReviewDraft,
   startLabReview,
 } from '@/lib/labReviews/mutations'
+import type { ProtocolOutcome } from '@/lib/labReviews/completion'
 import { parseTargets } from '@/lib/labReviews/needsAttention'
 import { getPdfPageCount } from '@/lib/labReviews/pdf'
 import { parseDraft } from '@/lib/labReviews/reviewDraft'
+import { planProtocolFor } from '@/lib/protocols/mutations'
+import { protocolOutcome } from '@/lib/protocols/protocolPlan'
 import { signLabFile } from '@/lib/labReviews/storage'
 import { isReplyIdentity, type ReplyIdentity } from '@/lib/labReviews/replyIdentity'
 import { replyToTicket } from '@/lib/zendesk'
@@ -105,6 +108,31 @@ export async function sendCsReplyAction(
 
   if (!result.ok) return { status: 'error', message: result.error }
   return { status: 'sent', warning: result.warning, sentAs: result.sentAs, sentBody: body }
+}
+
+/**
+ * What the medications in a draft would be quoted at, without quoting them.
+ *
+ * The confirmation screen's one server round trip. Pricing needs the catalog, the
+ * catalog lives in the database, and shipping it to the browser to price there is
+ * how the admin app ended up with two implementations of the same arithmetic — so
+ * the browser asks instead.
+ *
+ * Read-only and free of side effects: it prices, and stops. Approving the summary
+ * is what sends anything, and `completeLabReview` re-prices at that point rather
+ * than trusting a figure that came back through the browser.
+ *
+ * The draft crosses the wire as JSON and is re-parsed here, like every other
+ * action: a server action is a public endpoint, so a medication id arriving from it
+ * is an assertion, not a fact.
+ */
+export async function previewProtocolAction(draftJson: string): Promise<ProtocolOutcome | null> {
+  const access = await checkProviderAccess()
+  if (!access.ok) return null
+
+  const draft = parseDraft(JSON.parse(draftJson))
+
+  return protocolOutcome(await planProtocolFor(draft.newMedications))
 }
 
 /** Everything a lab-review write touches: the review, the queue it is ordered

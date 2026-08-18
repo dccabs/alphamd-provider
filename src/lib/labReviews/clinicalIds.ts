@@ -16,12 +16,19 @@ export const FLAG = {
   /** "Needs lab review" — cleared when a review is completed. Carries no history;
    *  `lab_reviews` is the record. */
   needsLabReview: 3,
+  /** "New Pricing / Protocol Sent" — carried by a patient who already has an
+   *  active subscription, in place of the status change. See `sendProtocol`. */
+  newPricingSent: 5,
   /** "Labs reviewed, no changes recommended" — only true for continue-protocol. */
   labsReviewedNoChanges: 6,
 } as const
 
 export const PATIENT_STATUS = {
-  /** "Non-Patient - Pricing sent to PT" */
+  /** "Patient, Active Subscription" — the one status a protocol send must not
+   *  overwrite, because "pricing sent" would read as a downgrade from it. */
+  activeSubscription: 8,
+  /** "Non-Patient - Pricing sent to PT" — what the main app's follow-up cron
+   *  looks for when it decides who to nudge about an unanswered quote. */
   pricingSentToPatient: 25,
   /** "Non-Patient - Treatment NOT Recommended" */
   treatmentNotRecommended: 26,
@@ -43,10 +50,12 @@ export const PATIENT_STATUS = {
 export const FLAG_LABELS: Record<number, string> = {
   [FLAG.followUpRequired]: 'Follow Up Required',
   [FLAG.needsLabReview]: 'Needs lab review',
+  [FLAG.newPricingSent]: 'New Pricing / Protocol Sent',
   [FLAG.labsReviewedNoChanges]: 'Labs reviewed, no changes recommended',
 }
 
 export const PATIENT_STATUS_LABELS: Record<number, string> = {
+  [PATIENT_STATUS.activeSubscription]: 'Patient, Active Subscription',
   [PATIENT_STATUS.pricingSentToPatient]: 'Non-Patient - Pricing sent to PT',
   [PATIENT_STATUS.treatmentNotRecommended]: 'Non-Patient - Treatment NOT Recommended',
 }

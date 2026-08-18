@@ -44,8 +44,18 @@ export type DoseSelection = {
   personal: string
 }
 
-/** What a filled-in selection amounts to: the two strings that get recorded. */
-export type DoseValue = { value: string; sig: string }
+/**
+ * What a filled-in selection amounts to: the two strings that get recorded, and
+ * the figure behind them.
+ *
+ * `weeklyMg` is carried because pricing needs a number and must not get it by
+ * parsing one back out of `value`. A dose surcharge — $3.75 for every 10mg above
+ * 200 on the injectables — is quoted to a patient off the back of it, and
+ * recovering `160` from the string `160mg/week` works right up until a dose is
+ * written some other way. Null for anything not dosed in weekly milligrams, which
+ * is every tablet and cream in the catalog and carries no surcharge either.
+ */
+export type DoseValue = { value: string; sig: string; weeklyMg: number | null }
 
 /** The doses a medication is kept at, as the picker lists them. */
 export type DoseOption = { id: number; value: string }
@@ -67,7 +77,9 @@ export const DEFAULT_WEEKLY_MG = 160
  */
 export function initialSelection(args: {
   from?: { weeklyMg: number; perWeek: number; route: Route } | null
-  previous?: (DoseValue & { perWeek?: number; route?: Route }) | null
+  /** Only the two strings, since the figure is re-read from `value` here — this
+   *  is a starting point for an input, not a price. */
+  previous?: { value: string; sig: string; perWeek?: number; route?: Route } | null
   options: DoseOption[]
 }): DoseSelection {
   const { from, previous, options } = args
@@ -111,6 +123,7 @@ export function selectionValue(
     return {
       value: weeklyMgLabel(mg),
       sig: injectionSig({ weeklyMg: mg, perWeek: selection.perWeek, route: selection.route }),
+      weeklyMg: mg,
     }
   }
 
@@ -118,9 +131,9 @@ export function selectionValue(
     const typed = selection.personal.trim()
     // The dose is the instruction already, so there is no second sentence to
     // generate from it.
-    return typed ? { value: typed, sig: '' } : null
+    return typed ? { value: typed, sig: '', weeklyMg: null } : null
   }
 
   const picked = args.options.find((option) => String(option.id) === selection.choice)
-  return picked ? { value: picked.value, sig: '' } : null
+  return picked ? { value: picked.value, sig: '', weeklyMg: null } : null
 }

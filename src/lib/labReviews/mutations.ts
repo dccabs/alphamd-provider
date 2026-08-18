@@ -5,6 +5,15 @@ import { consultProblems, requestConsultation } from '@/lib/consultations/mutati
 import type { ConsultRequest } from '@/lib/consultations/request'
 import { labOrderProblems, scheduleLabOrder } from '@/lib/labOrders/mutations'
 import { orderWhen, type LabOrder } from '@/lib/labOrders/order'
+import { addPatientFlag } from '@/lib/patients/flags'
+import {
+  handoffLines,
+  planProtocolFor,
+  protocolProblems,
+  sendProtocol,
+  type ProtocolSendResult,
+} from '@/lib/protocols/mutations'
+import { protocolOutcome, type ProtocolPlan } from '@/lib/protocols/protocolPlan'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { FLAG } from './clinicalIds'
 import {
@@ -336,11 +345,18 @@ export async function completeLabReview(
     return { ok: false, error: `${holder} holds this review. It cannot be finished from here.` }
   }
 
+  // Priced before anything is written, for two reasons: the preflight below needs
+  // to know whether a quote is going out, and the note written further down has to
+  // say what the patient was quoted. Held and passed along rather than re-derived,
+  // so the note and the email cannot state different prices.
+  const protocol = await planProtocolFor(draft.newMedications)
+
   // Asked before anything is written, because the answer can only be acted on
   // while the review is still open.
   const preflight = [
     ...(await labOrderProblems(review.patientId, draft.labOrders)),
     ...(await consultProblems(review.patientId, draft.consultation)),
+    ...(await protocolProblems(review.patientId, protocol)),
   ]
   if (preflight.length) {
     return { ok: false, error: `${preflight.join(' ')} Nothing has been saved.` }
@@ -348,7 +364,7 @@ export async function completeLabReview(
 
   const admin = createAdminClient()
   const actor = await resolveActor(access)
-  const plan = planCompletion(draft, actor.displayName)
+  const plan = planCompletion(draft, actor.displayName, protocolOutcome(protocol))
   const now = new Date().toISOString()
 
   const { data: updated, error } = await admin
@@ -382,6 +398,15 @@ export async function completeLabReview(
   warnings.push(...(await placeLabOrders(access, reviewId, draft.labOrders)))
   warnings.push(...(await sendConsultInvite(access, reviewId, draft.consultation)))
 
+  const protocolSend = await sendRecommendedProtocol(
+    access,
+    reviewId,
+    review.patientId,
+    protocol,
+    draft.newMedications
+  )
+  warnings.push(...protocolSend.warnings)
+
   const logged = await logLabReviewEvent({
     labReviewId: reviewId,
     eventType: 'completed',
@@ -396,6 +421,7 @@ export async function completeLabReview(
       patientStatusId: plan.patientStatusId,
       labOrdersPlaced: draft.labOrders.length,
       consultationRequested: draft.consultation?.eventTypeId ?? null,
+      protocol: protocolSend.recorded,
       sideEffectWarnings: warnings,
     },
   })
@@ -483,6 +509,63 @@ async function sendConsultInvite(
 }
 
 /**
+ * Send the recommended protocol the added medications came to.
+ *
+ * The one side effect at completion that quotes the patient a price, so it runs
+ * last: everything before it is a record of a decision, and this is the first
+ * thing that asks for money. A failure anywhere earlier therefore happens before
+ * a price has been promised.
+ *
+ * `sendProtocol` is where the ordering and the compensating delete live. This only
+ * translates its outcome into the two things the caller needs — warnings for the
+ * provider, and a line for the review's history — and it treats a handoff as a
+ * *normal* result rather than a warning. A protocol staff will price by hand is
+ * how most of them are priced today; telling the provider "something went wrong"
+ * about the status quo would train them to ignore the message.
+ */
+async function sendRecommendedProtocol(
+  access: ProviderAccess,
+  reviewId: string,
+  patientId: string,
+  plan: ProtocolPlan,
+  medications: ReviewDraft['newMedications']
+): Promise<{ warnings: string[]; recorded: unknown }> {
+  let result: ProtocolSendResult
+  try {
+    result = await sendProtocol(access, reviewId, patientId, plan, medications)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'unknown error'
+    return {
+      warnings: [`the recommended protocol was not sent (${message})`],
+      recorded: { status: 'error', error: message },
+    }
+  }
+
+  switch (result.kind) {
+    case 'nothing-to-send':
+      return { warnings: [], recorded: null }
+
+    case 'handed-off':
+      return {
+        warnings: [],
+        recorded: { status: 'handed-off', reasons: handoffLines(result.blocks) },
+      }
+
+    case 'failed':
+      return {
+        warnings: [`the recommended protocol was not sent (${result.error})`],
+        recorded: { status: 'failed', error: result.error },
+      }
+
+    case 'sent':
+      return {
+        warnings: result.warnings,
+        recorded: { status: 'sent', snapshotId: result.snapshotId },
+      }
+  }
+}
+
+/**
  * The flag, status and chart-note writes that follow a completed review.
  *
  * Each is attempted independently and each failure is *reported*, never thrown.
@@ -511,7 +594,7 @@ async function applySideEffects(
   }
 
   for (const flagId of plan.addFlagIds) {
-    const added = await addFlag(patientId, flagId, access.userId)
+    const added = await addPatientFlag(patientId, flagId, access.userId)
     if (!added) warnings.push(`flag ${flagId} could not be added`)
   }
 
@@ -533,47 +616,6 @@ async function applySideEffects(
   if (noteError) warnings.push('the completion note could not be written to the chart')
 
   return warnings
-}
-
-/**
- * Add one flag, idempotently.
- *
- * Mirrors the main app's `addFlagsToPatient`: `(patient_id, flag_id)` is unique,
- * and an inactive row may already exist, so a failed insert is retried as a
- * reactivating update rather than treated as an error. `last_updated_by` is NOT
- * NULL in this table.
- */
-async function addFlag(
-  patientId: string,
-  flagId: number,
-  staffUserId: string
-): Promise<boolean> {
-  const admin = createAdminClient()
-
-  const { data: existing } = await admin
-    .from('user_flags_join')
-    .select('id, active')
-    .eq('patient_id', patientId)
-    .eq('flag_id', flagId)
-    .maybeSingle()
-
-  if (existing?.active) return true
-
-  if (existing) {
-    const { error } = await admin
-      .from('user_flags_join')
-      .update({ active: true, last_updated_by: staffUserId })
-      .eq('id', existing.id)
-    return !error
-  }
-
-  const { error } = await admin.from('user_flags_join').insert({
-    patient_id: patientId,
-    flag_id: flagId,
-    active: true,
-    last_updated_by: staffUserId,
-  })
-  return !error
 }
 
 /**
@@ -738,7 +780,7 @@ async function routeToCustomerService(
 
   // "Follow Up Required" is what makes the escalation visible outside this review,
   // on the patient's own record.
-  const flagged = await addFlag(review.patientId, FLAG.followUpRequired, access.userId)
+  const flagged = await addPatientFlag(review.patientId, FLAG.followUpRequired, access.userId)
   if (!flagged) warnings.push('the "Follow Up Required" flag could not be added')
 
   return warnings

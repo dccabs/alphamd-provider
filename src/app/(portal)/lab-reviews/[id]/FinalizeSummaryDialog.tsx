@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 
 import { Button } from '@/components/ui/button'
 import {
@@ -14,9 +14,14 @@ import {
 import { consultLine } from '@/lib/consultations/request'
 import { orderLine, scheduledDateFor } from '@/lib/labOrders/order'
 import { FLAG_LABELS, PATIENT_STATUS_LABELS } from '@/lib/labReviews/clinicalIds'
-import { planCompletion, reviewAudiences } from '@/lib/labReviews/completion'
+import {
+  planCompletion,
+  reviewAudiences,
+  type ProtocolOutcome,
+} from '@/lib/labReviews/completion'
 import { shortDate } from '@/lib/labReviews/format'
 import { DISPOSITION_LABELS, type ReviewDraft } from '@/lib/labReviews/reviewDraft'
+import { previewProtocolAction } from '../actions'
 
 /**
  * The last screen before a review is finished: everything it will do, in one
@@ -59,9 +64,37 @@ export function FinalizeSummaryDialog({
   onApprove: (() => void) | null
 }) {
   const [pressed, setPressed] = useState(false)
+  const quote = useProtocolPreview(draft)
 
-  const plan = planCompletion(draft, providerName)
-  const audiences = reviewAudiences(draft, providerName)
+  // Nothing is rendered until the pricing is known, rather than rendering the
+  // cards and filling the price in when it arrives. Two of the cards *contain* the
+  // quote — a provider who read the customer service text a moment before it
+  // gained a line about money has read something that was never true.
+  if (quote.state !== 'ready') {
+    return (
+      <Dialog open onOpenChange={(next) => !next && onEdit()}>
+        <DialogContent className="sm:max-w-4xl">
+          <DialogHeader>
+            <DialogTitle>Before you finish — {patientName}</DialogTitle>
+            <DialogDescription aria-live="polite">
+              {quote.state === 'loading'
+                ? 'Pricing the recommended protocol…'
+                : 'The protocol could not be priced just now. Go back, then try again — nothing has been submitted.'}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={onEdit}>
+              Go back and edit
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    )
+  }
+
+  const protocol = quote.outcome
+  const plan = planCompletion(draft, providerName, protocol)
+  const audiences = reviewAudiences(draft, providerName, protocol)
   const { disposition, doseChanges, newMedications, labOrders, consultation } = plan.detail
 
   const effects = [
@@ -86,6 +119,13 @@ export function FinalizeSummaryDialog({
     // plainly because "a link is created" would suggest it could still fail here.
     consultation
       ? `The booking link already reserved for this review is emailed to ${patientEmail ?? 'the patient'}, and stops working once they book.`
+      : null,
+    // The heaviest of them, and last, matching the order it actually runs in.
+    protocol?.kind === 'quote'
+      ? `The protocol and its price are emailed to ${patientEmail ?? 'the patient'}, and the consents it requires are requested separately. Nothing is charged until the patient approves it themselves.`
+      : null,
+    protocol?.kind === 'quote'
+      ? 'The quote is saved to the patient\'s record, so they can find it by logging in.'
       : null,
   ].filter(Boolean)
 
@@ -171,6 +211,8 @@ export function FinalizeSummaryDialog({
             </Section>
           )}
 
+          {protocol && <ProtocolSection protocol={protocol} />}
+
           {/* Named by reader rather than by field, because the chart card below
               contains the other two: the note records what the patient was told
               and what customer service was handed. */}
@@ -220,6 +262,84 @@ export function FinalizeSummaryDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+type PreviewState =
+  | { state: 'loading' }
+  | { state: 'ready'; outcome: ProtocolOutcome | null }
+  | { state: 'error' }
+
+/**
+ * Ask the server what the added medications come to.
+ *
+ * Fetched once when the summary opens, rather than kept live as the provider
+ * types: the draft cannot change while this dialog is on top of the flyout, and a
+ * price that moved under a provider mid-read is the one thing this screen exists to
+ * prevent.
+ *
+ * A failure is a state, not a silent null. Rendering the summary without the quote
+ * would present a review that sends a protocol as one that does not.
+ */
+function useProtocolPreview(draft: ReviewDraft): PreviewState {
+  const [preview, setPreview] = useState<PreviewState>({ state: 'loading' })
+
+  useEffect(() => {
+    let live = true
+
+    previewProtocolAction(JSON.stringify(draft))
+      .then((outcome) => live && setPreview({ state: 'ready', outcome }))
+      .catch(() => live && setPreview({ state: 'error' }))
+
+    return () => {
+      live = false
+    }
+    // Once, on open. The draft is frozen behind this dialog, and depending on it
+    // would re-price on every render, because it arrives as a fresh object.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  return preview
+}
+
+/**
+ * What the patient is being quoted, or why nobody could quote it.
+ *
+ * The most consequential card on this screen: approving is what emails a price,
+ * and it is the only figure here the provider did not type themselves. So the
+ * breakdown is shown in full rather than summarised to a total — a $50 topical
+ * surcharge the provider did not expect is exactly the kind of thing that should
+ * be caught before it reaches a patient's card.
+ */
+function ProtocolSection({ protocol }: { protocol: ProtocolOutcome }) {
+  if (protocol.kind === 'handed-off') {
+    return (
+      <Section title="RECOMMENDED PROTOCOL">
+        <div className="rounded-lg border border-dashed px-3 py-2.5 text-[13px] leading-relaxed">
+          <span className="font-medium">No quote is emailed.</span> Customer service prices this
+          protocol by hand and sends it.
+          <ul className="mt-1.5 flex flex-col gap-1 text-xs text-muted-foreground">
+            {protocol.reasons.map((reason) => (
+              <li key={reason}>{reason}</li>
+            ))}
+          </ul>
+        </div>
+      </Section>
+    )
+  }
+
+  return (
+    <Section title="RECOMMENDED PROTOCOL">
+      <div className="rounded-lg border bg-muted/40 px-3 py-2.5 text-[13px] leading-relaxed">
+        <p className="font-semibold">{protocol.total} due today</p>
+        {/* Pre-formatted: these are the same lines, aligned the same way, that the
+            patient reads in their email. */}
+        <pre className="mt-1.5 font-sans text-xs leading-relaxed whitespace-pre-wrap">
+          {protocol.lines.join('\n')}
+        </pre>
+        <p className="mt-2 text-xs text-muted-foreground">{protocol.caveat}</p>
+      </div>
+    </Section>
   )
 }
 

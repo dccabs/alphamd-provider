@@ -16,7 +16,7 @@ function draft(overrides: Partial<ReviewDraft> = {}): ReviewDraft {
 }
 
 function med(overrides: Partial<DraftMedication> = {}): DraftMedication {
-  return { medicationId: null, name: '', dose: '', sig: '', ...overrides }
+  return { medicationId: null, name: '', dose: '', sig: '', dosageMg: null, ...overrides }
 }
 
 function change(overrides: Partial<DoseChange> = {}): DoseChange {
