@@ -10,6 +10,7 @@ const row = (patch: Partial<QueueRow> = {}): QueueRow => ({
   id: 'r1',
   patientId: 'p1',
   patientName: 'Austin Ross',
+  patientEmail: 'austin@example.com',
   status: 'active',
   patientStatus: 'Patient, Active Subscription',
   summaryStatus: 'ready',

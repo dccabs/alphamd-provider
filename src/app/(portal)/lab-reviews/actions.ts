@@ -19,6 +19,10 @@ import { parseDraft } from '@/lib/labReviews/reviewDraft'
 import { planProtocolFor } from '@/lib/protocols/mutations'
 import { protocolOutcome } from '@/lib/protocols/protocolPlan'
 import { signLabFile } from '@/lib/labReviews/storage'
+import {
+  sendLabReviewPatientMessage,
+  type PatientMessageSendResult,
+} from '@/lib/labReviews/patientMessageSend'
 import { isReplyIdentity, type ReplyIdentity } from '@/lib/labReviews/replyIdentity'
 import { replyToTicket } from '@/lib/zendesk'
 import type { WriteState } from './state'
@@ -108,6 +112,23 @@ export async function sendCsReplyAction(
 
   if (!result.ok) return { status: 'error', message: result.error }
   return { status: 'sent', warning: result.warning, sentAs: result.sentAs, sentBody: body }
+}
+
+/**
+ * Send the typed patient message as a new Zendesk ticket.
+ *
+ * This is the first slice of finishing: it does not mark the review finished,
+ * write the chart, or place labs. The review id names the patient; the message
+ * travels with the request so a keystroke that has not autosaved still goes out.
+ */
+export async function sendPatientLabReviewMessageAction(
+  reviewId: string,
+  message: string
+): Promise<PatientMessageSendResult> {
+  const access = await checkProviderAccess()
+  if (!access.ok) return { status: 'error', message: DENIED }
+
+  return sendLabReviewPatientMessage(access.access, reviewId, String(message ?? ''))
 }
 
 /**

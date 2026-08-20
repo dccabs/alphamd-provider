@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, type ReactNode } from 'react'
+import { Check, Loader2 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import {
@@ -21,7 +22,8 @@ import {
 } from '@/lib/labReviews/completion'
 import { shortDate } from '@/lib/labReviews/format'
 import { DISPOSITION_LABELS, type ReviewDraft } from '@/lib/labReviews/reviewDraft'
-import { previewProtocolAction } from '../actions'
+import { REPLY_IDENTITY_LABELS, type ReplyIdentity } from '@/lib/labReviews/replyIdentity'
+import { previewProtocolAction, sendPatientLabReviewMessageAction } from '../actions'
 
 /**
  * The last screen before a review is finished: everything it will do, in one
@@ -41,16 +43,27 @@ import { previewProtocolAction } from '../actions'
  * **Precondition:** `validateCompletion(draft)` must be empty. Both functions
  * throw without a disposition, which is deliberate — a summary of an incoherent
  * review would be a summary of something that cannot happen.
+ *
+ * Approve currently sends only the patient message (a new Zendesk ticket). The
+ * review is left unfinished; the other cards stay preview.
  */
 
+type PatientSend =
+  | { status: 'idle' }
+  | { status: 'creating' }
+  | { status: 'skipped' }
+  | { status: 'sent'; ticketId: number; sentAs: ReplyIdentity; warning?: string }
+  | { status: 'error'; message: string }
+
 export function FinalizeSummaryDialog({
+  reviewId,
   draft,
   patientName,
   patientEmail,
   providerName,
   onEdit,
-  onApprove,
 }: {
+  reviewId: string
   draft: ReviewDraft
   patientName: string
   /** Where a consultation invitation would be sent, named here because approving
@@ -59,12 +72,15 @@ export function FinalizeSummaryDialog({
   /** The name the chart note will be signed with. */
   providerName: string
   onEdit: () => void
-  /** What approving does, or null while finishing is switched off — in which case
-   *  the button says plainly that it does nothing rather than pretending. */
-  onApprove: (() => void) | null
 }) {
-  const [pressed, setPressed] = useState(false)
+  const [patientSend, setPatientSend] = useState<PatientSend>({ status: 'idle' })
   const quote = useProtocolPreview(draft)
+  const sending = patientSend.status === 'creating'
+  const canClose =
+    patientSend.status === 'sent' ||
+    patientSend.status === 'skipped' ||
+    patientSend.status === 'error'
+  const canGoBack = patientSend.status === 'idle'
 
   // Nothing is rendered until the pricing is known, rather than rendering the
   // cards and filling the price in when it arrives. Two of the cards *contain* the
@@ -129,16 +145,50 @@ export function FinalizeSummaryDialog({
       : null,
   ].filter(Boolean)
 
+  const approve = async () => {
+    if (patientSend.status !== 'idle' && patientSend.status !== 'error') return
+
+    // Empty is decided here so the section never flashes "Creating".
+    if (!draft.patientMessage.trim()) {
+      setPatientSend({ status: 'skipped' })
+      return
+    }
+
+    setPatientSend({ status: 'creating' })
+    const result = await sendPatientLabReviewMessageAction(reviewId, draft.patientMessage)
+    if (result.status === 'skipped') {
+      setPatientSend({ status: 'skipped' })
+      return
+    }
+    if (result.status === 'error') {
+      setPatientSend({ status: 'error', message: result.message })
+      return
+    }
+    setPatientSend({
+      status: 'sent',
+      ticketId: result.ticketId,
+      sentAs: result.sentAs,
+      warning: result.warning,
+    })
+  }
+
   return (
-    <Dialog open onOpenChange={(next) => !next && onEdit()}>
+    <Dialog open onOpenChange={(next) => !next && !sending && onEdit()}>
       {/* 4xl, the same cap as every other dialog in the review. The blocks here are
           long — a whole patient message, a whole chart note — and the width buys
           fewer wrapped lines, so less of the screen is spent scrolling. */}
-      <DialogContent className="max-h-[90dvh] w-full gap-0 overflow-y-auto sm:max-w-4xl">
+      <DialogContent
+        className="max-h-[90dvh] w-full gap-0 overflow-y-auto sm:max-w-4xl"
+        showCloseButton={canClose || canGoBack}
+      >
         <DialogHeader className="pb-4 pr-8">
           <DialogTitle>Before you finish — {patientName}</DialogTitle>
           <DialogDescription>
-            Nothing has been submitted. This is what finishing the review would send and record.
+            {sending
+              ? 'Sending the patient message. The review is not finished.'
+              : canClose
+                ? 'The patient message has been handled. The review is still open — nothing else has been submitted.'
+                : 'Nothing has been submitted. This is what finishing the review would send and record.'}
           </DialogDescription>
         </DialogHeader>
 
@@ -220,6 +270,7 @@ export function FinalizeSummaryDialog({
             title="THE PATIENT RECEIVES"
             text={audiences.patient}
             empty="Nothing written — the patient will not hear from you about this review."
+            status={<PatientSendStatus send={patientSend} />}
           />
 
           <Destination
@@ -248,17 +299,19 @@ export function FinalizeSummaryDialog({
         </div>
 
         <DialogFooter className="mt-4 items-center">
-          {!onApprove && (
-            <p aria-live="polite" className="mr-auto text-xs text-muted-foreground">
-              {pressed
-                ? 'Nothing happened. Finishing is switched off, so this review is still open, no labs were ordered and no invitation was sent.'
-                : 'Approve does nothing yet — no note is written, no labs are ordered, no consultation invitation is sent and nothing reaches the patient.'}
-            </p>
-          )}
-          <Button variant="outline" onClick={onEdit}>
+          <Button variant="outline" onClick={onEdit} disabled={!canGoBack}>
             Go back and edit
           </Button>
-          <Button onClick={() => (onApprove ? onApprove() : setPressed(true))}>Approve</Button>
+          {canClose ? (
+            <>
+              {patientSend.status === 'error' && (
+                <Button onClick={() => void approve()}>Retry</Button>
+              )}
+              <Button onClick={onEdit}>Close</Button>
+            </>
+          ) : (
+            !sending && <Button onClick={() => void approve()}>Approve</Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -354,7 +407,17 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 
 /** One reader's text, verbatim. The empty state says who will not hear anything
  *  rather than leaving a blank panel that reads as a rendering failure. */
-function Destination({ title, text, empty }: { title: string; text: string; empty?: string }) {
+function Destination({
+  title,
+  text,
+  empty,
+  status,
+}: {
+  title: string
+  text: string
+  empty?: string
+  status?: ReactNode
+}) {
   return (
     <Section title={title}>
       {text ? (
@@ -366,6 +429,50 @@ function Destination({ title, text, empty }: { title: string; text: string; empt
           {empty}
         </p>
       )}
+      {status}
     </Section>
+  )
+}
+
+function PatientSendStatus({ send }: { send: PatientSend }) {
+  if (send.status === 'idle') return null
+
+  if (send.status === 'creating') {
+    return (
+      <p
+        aria-live="polite"
+        className="flex items-center gap-1.5 text-xs text-muted-foreground"
+      >
+        <Loader2 className="size-3.5 animate-spin" aria-hidden />
+        Creating Zendesk ticket…
+      </p>
+    )
+  }
+
+  if (send.status === 'skipped') {
+    return (
+      <p aria-live="polite" className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Check className="size-3.5" aria-hidden />
+        Nothing to send — no ticket created
+      </p>
+    )
+  }
+
+  if (send.status === 'error') {
+    return (
+      <p role="alert" className="text-xs text-destructive">
+        {send.message}
+      </p>
+    )
+  }
+
+  return (
+    <div aria-live="polite" className="flex flex-col gap-1">
+      <p className="flex items-center gap-1.5 text-xs">
+        <Check className="size-3.5" aria-hidden />
+        Sent — ticket #{send.ticketId} · {REPLY_IDENTITY_LABELS[send.sentAs]}
+      </p>
+      {send.warning && <p className="text-xs text-muted-foreground">{send.warning}</p>}
+    </div>
   )
 }

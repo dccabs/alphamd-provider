@@ -10,8 +10,18 @@ import {
   type AnalyteCollection,
 } from './analytes'
 import { RESTRICTED_MEDICATION_IDS } from './clinicalIds'
+import {
+  PATIENT_SEARCH_MIN_CHARS,
+  searchPatients,
+  tokensOf,
+  type PatientSearchRow,
+  type PatientSuggestion,
+  type QueuePatient,
+} from './patientSearch'
 import type { QueueRow } from './queueRow'
 import { parseDraft, type ReviewDraft } from './reviewDraft'
+
+export type { PatientSuggestion, QueuePatient }
 
 /**
  * Reads for the lab-review queue and detail screens.
@@ -119,10 +129,53 @@ function orderQueue<T extends { order: (col: string, opts: object) => T }>(query
 
 type NameRow = { user_id: string | null; first_name: string | null; last_name: string | null }
 
+type Contact = { name: string; email: string | null }
+
+const QUEUE_SELECT =
+  'id, patient_id, status, summary_status, assigned_to, started_at, draft_updated_at, reviewed_at, last_source_at, created_at'
+
+type QueueDbRow = {
+  id: string
+  patient_id: string
+  status: string
+  summary_status: string | null
+  assigned_to: string | null
+  started_at: string | null
+  draft_updated_at: string | null
+  reviewed_at: string | null
+  last_source_at: string | null
+  created_at: string | null
+}
+
 function fullName(row: NameRow | undefined, fallback = 'Unknown patient'): string {
   if (!row) return fallback
   const name = [row.first_name, row.last_name].filter(Boolean).join(' ').trim()
   return name || fallback
+}
+
+async function contactsFor(
+  userIds: string[],
+  fallback = 'Unknown patient'
+): Promise<Map<string, Contact>> {
+  const unique = [...new Set(userIds.filter(Boolean))]
+  if (!unique.length) return new Map()
+
+  const admin = createAdminClient()
+  const { data, error } = await admin
+    .from('user_list')
+    .select('user_id, first_name, last_name, email')
+    .in('user_id', unique)
+  if (error) throw new Error(`user_list lookup failed: ${error.message}`)
+
+  return new Map(
+    (data ?? []).map((r) => {
+      const email = typeof r.email === 'string' ? r.email.trim() : ''
+      return [
+        r.user_id as string,
+        { name: fullName(r as NameRow, fallback), email: email || null },
+      ]
+    })
+  )
 }
 
 /** Display names for a set of user ids. Ids with no `user_list` row are absent
@@ -132,41 +185,27 @@ export async function namesFor(
   userIds: string[],
   fallback = 'Unknown patient'
 ): Promise<Map<string, string>> {
-  const unique = [...new Set(userIds.filter(Boolean))]
-  if (!unique.length) return new Map()
-
-  const admin = createAdminClient()
-  const { data, error } = await admin
-    .from('user_list')
-    .select('user_id, first_name, last_name')
-    .in('user_id', unique)
-  if (error) throw new Error(`user_list lookup failed: ${error.message}`)
-
-  return new Map((data ?? []).map((r) => [r.user_id as string, fullName(r as NameRow, fallback)]))
+  const contacts = await contactsFor(userIds, fallback)
+  return new Map([...contacts].map(([id, contact]) => [id, contact.name]))
 }
 
-export async function listLabReviews(status: LabReviewStatus): Promise<QueueRow[]> {
-  const admin = createAdminClient()
+export async function getQueuePatient(patientId: string): Promise<QueuePatient | null> {
+  const contacts = await contactsFor([patientId])
+  const contact = contacts.get(patientId)
+  if (!contact) return null
+  return { patientId, name: contact.name, email: contact.email }
+}
 
-  const { data, error } = await orderQueue(
-    admin
-      .from('lab_reviews')
-      .select(
-        'id, patient_id, status, summary_status, assigned_to, started_at, draft_updated_at, reviewed_at, last_source_at, created_at'
-      )
-      .eq('status', status)
-  )
-  if (error) throw new Error(`lab_reviews query failed: ${error.message}`)
-
-  const rows = data ?? []
+async function hydrateQueueRows(rows: QueueDbRow[]): Promise<QueueRow[]> {
   if (!rows.length) return []
 
-  const reviewIds = rows.map((r) => r.id as string)
-  const patientIds = rows.map((r) => r.patient_id as string)
-  const assigneeIds = rows.map((r) => r.assigned_to as string | null).filter(Boolean) as string[]
+  const admin = createAdminClient()
+  const reviewIds = rows.map((r) => r.id)
+  const patientIds = rows.map((r) => r.patient_id)
+  const assigneeIds = rows.map((r) => r.assigned_to).filter(Boolean) as string[]
 
-  const [names, sources, flags, statuses] = await Promise.all([
-    namesFor([...patientIds, ...assigneeIds]),
+  const [contacts, sources, flags, statuses] = await Promise.all([
+    contactsFor([...patientIds, ...assigneeIds]),
     admin.from('lab_review_sources').select('lab_review_id, source').in('lab_review_id', reviewIds),
     listFlagsFor(patientIds),
     listPatientStatuses(patientIds),
@@ -181,22 +220,111 @@ export async function listLabReviews(status: LabReviewStatus): Promise<QueueRow[
   }
 
   return rows.map((r) => ({
-    id: r.id as string,
-    patientId: r.patient_id as string,
-    patientName: names.get(r.patient_id as string) ?? 'Unknown patient',
-    status: r.status as string,
-    patientStatus: statuses.get(r.patient_id as string) ?? null,
-    summaryStatus: (r.summary_status as string | null) ?? null,
-    assignedTo: (r.assigned_to as string | null) ?? null,
-    assignedToName: r.assigned_to ? (names.get(r.assigned_to as string) ?? null) : null,
-    startedAt: (r.started_at as string | null) ?? null,
-    draftUpdatedAt: (r.draft_updated_at as string | null) ?? null,
-    reviewedAt: (r.reviewed_at as string | null) ?? null,
-    lastSourceAt: (r.last_source_at as string | null) ?? null,
-    createdAt: (r.created_at as string | null) ?? null,
-    sourceKinds: [...(kindsByReview.get(r.id as string) ?? [])].sort(),
-    flags: flags.get(r.patient_id as string) ?? [],
+    id: r.id,
+    patientId: r.patient_id,
+    patientName: contacts.get(r.patient_id)?.name ?? 'Unknown patient',
+    patientEmail: contacts.get(r.patient_id)?.email ?? null,
+    status: r.status,
+    patientStatus: statuses.get(r.patient_id) ?? null,
+    summaryStatus: r.summary_status,
+    assignedTo: r.assigned_to,
+    assignedToName: r.assigned_to ? (contacts.get(r.assigned_to)?.name ?? null) : null,
+    startedAt: r.started_at,
+    draftUpdatedAt: r.draft_updated_at,
+    reviewedAt: r.reviewed_at,
+    lastSourceAt: r.last_source_at,
+    createdAt: r.created_at,
+    sourceKinds: [...(kindsByReview.get(r.id) ?? [])].sort(),
+    flags: flags.get(r.patient_id) ?? [],
   }))
+}
+
+export async function listLabReviews(status: LabReviewStatus): Promise<QueueRow[]> {
+  const admin = createAdminClient()
+
+  const { data, error } = await orderQueue(
+    admin.from('lab_reviews').select(QUEUE_SELECT).eq('status', status)
+  )
+  if (error) throw new Error(`lab_reviews query failed: ${error.message}`)
+
+  return hydrateQueueRows((data ?? []) as QueueDbRow[])
+}
+
+export async function listLabReviewsForPatient(patientId: string): Promise<QueueRow[]> {
+  const admin = createAdminClient()
+
+  const { data, error } = await orderQueue(
+    admin.from('lab_reviews').select(QUEUE_SELECT).eq('patient_id', patientId)
+  )
+  if (error) throw new Error(`lab_reviews query failed: ${error.message}`)
+
+  return hydrateQueueRows((data ?? []) as QueueDbRow[])
+}
+
+function ilikeToken(token: string): string {
+  return token.replace(/[%_,()"]/g, '')
+}
+
+/**
+ * People in `user_list` matching the query, ranked for the queue picker.
+ *
+ * Token `ilike` is a prefilter so we do not load the whole table;
+ * `searchPatients` is the real match and rank.
+ */
+export async function searchPatientsForQueue(query: string): Promise<PatientSuggestion[]> {
+  const tokens = tokensOf(query).map(ilikeToken).filter(Boolean)
+  if (query.trim().length < PATIENT_SEARCH_MIN_CHARS || !tokens.length) return []
+
+  const admin = createAdminClient()
+  let userQuery = admin.from('user_list').select('user_id, first_name, last_name, email')
+  for (const token of tokens) {
+    userQuery = userQuery.or(
+      `first_name.ilike.%${token}%,last_name.ilike.%${token}%,email.ilike.%${token}%`
+    )
+  }
+
+  const [users, reviews] = await Promise.all([
+    userQuery,
+    admin.from('lab_reviews').select('patient_id, status, last_source_at'),
+  ])
+  if (users.error) throw new Error(`user_list search failed: ${users.error.message}`)
+  if (reviews.error) throw new Error(`lab_reviews query failed: ${reviews.error.message}`)
+
+  const stats = new Map<
+    string,
+    { needsAttention: number; active: number; finished: number; lastSourceAt: string | null }
+  >()
+  for (const row of reviews.data ?? []) {
+    const id = row.patient_id as string
+    const cur = stats.get(id) ?? {
+      needsAttention: 0,
+      active: 0,
+      finished: 0,
+      lastSourceAt: null as string | null,
+    }
+    if (row.status === 'needs_attention') cur.needsAttention += 1
+    else if (row.status === 'active') cur.active += 1
+    else if (row.status === 'finished') cur.finished += 1
+    const at = (row.last_source_at as string | null) ?? null
+    if (at && (!cur.lastSourceAt || at > cur.lastSourceAt)) cur.lastSourceAt = at
+    stats.set(id, cur)
+  }
+
+  const people: PatientSearchRow[] = (users.data ?? []).map((row) => {
+    const counts = stats.get(row.user_id as string)
+    return {
+      patientId: row.user_id as string,
+      firstName: (row.first_name as string | null) ?? '',
+      lastName: (row.last_name as string | null) ?? '',
+      email: (row.email as string | null) ?? '',
+      needsAttention: counts?.needsAttention ?? 0,
+      active: counts?.active ?? 0,
+      finished: counts?.finished ?? 0,
+      lastSourceAt: counts?.lastSourceAt ?? null,
+    }
+  })
+
+  return searchPatients(people, query)
 }
 
 export type QueueSummary = {

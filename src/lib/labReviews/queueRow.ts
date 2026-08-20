@@ -19,6 +19,7 @@ export type QueueRow = {
   id: string
   patientId: string
   patientName: string
+  patientEmail: string | null
   /** The review's own `lab_reviews.status`. */
   status: string
   /** The patient's `user_statuses` label — the same one the detail header shows.

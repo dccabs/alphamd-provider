@@ -3,7 +3,8 @@ import 'server-only'
 import type { ReplyIdentity } from '@/lib/labReviews/replyIdentity'
 
 /**
- * Zendesk **send** path only.
+ * Zendesk **send** path only: reply to an existing ticket, or create a new one
+ * (`POST /api/v2/tickets.json`) for a lab-review patient message.
  *
  * Reading the thread is a database query against `zendesk_last_contact` (see
  * `labReviews/tabs.ts`) — the comments are already mirrored into Postgres by a
@@ -36,11 +37,23 @@ import type { ReplyIdentity } from '@/lib/labReviews/replyIdentity'
  * worth having.
  */
 
-const ZENDESK_DOMAIN = process.env.ZENDESK_DOMAIN || 'alphamd.zendesk.com'
-const ZENDESK_ACCOUNT_EMAIL = process.env.ZENDESK_API_EMAIL || 'alphaai@alphamd.org'
+const ZENDESK_DOMAIN = zendeskHost(process.env.ZENDESK_DOMAIN, 'alphamd.zendesk.com')
+const ZENDESK_ACCOUNT_EMAIL = process.env.ZENDESK_API_EMAIL?.trim() || 'alphaai@alphamd.org'
+
+/** `.env` is not JavaScript: a pasted `process.env.X || '…'` is a hostname of
+ *  that whole string, and `fetch` then fails with a URL nobody can read. */
+function zendeskHost(value: string | undefined, fallback: string): string {
+  const host = value?.trim() ?? ''
+  if (!host || host.includes('process.env') || host.includes(' ')) return fallback
+  return host
+}
 
 export type ReplyResult =
   | { ok: true; sentAs: ReplyIdentity; warning?: string }
+  | { ok: false; error: string }
+
+export type CreateTicketResult =
+  | { ok: true; ticketId: number; sentAs: ReplyIdentity; warning?: string }
   | { ok: false; error: string }
 
 function basicAuth(): string | null {
@@ -100,6 +113,46 @@ async function publicCapableAuthorId(email: string, auth: string): Promise<numbe
   }
 }
 
+type PublicComment = { html_body: string; public: true; author_id?: number }
+
+type ZendeskAudit = { events?: { type: string; public?: boolean }[] }
+
+/** Asking for `support` skips the lookup: an omitted `author_id` is what makes
+ *  Zendesk attribute the comment to the service account. */
+async function commentAuthor(
+  as: ReplyIdentity,
+  authorEmail: string,
+  auth: string
+): Promise<{ authorId: number | null; sentAs: ReplyIdentity }> {
+  const authorId = as === 'self' ? await publicCapableAuthorId(authorEmail, auth) : null
+  return { authorId, sentAs: authorId ? 'self' : 'support' }
+}
+
+function publicComment(body: string, authorId: number | null): PublicComment {
+  const comment: PublicComment = { html_body: toHtml(body.trim()), public: true }
+  if (authorId) comment.author_id = authorId
+  return comment
+}
+
+function commentEventOf(audit: ZendeskAudit | undefined) {
+  return audit?.events?.find((e) => e.type === 'Comment')
+}
+
+function publicCommentWarning(
+  as: ReplyIdentity,
+  sentAs: ReplyIdentity,
+  commentEvent: { public?: boolean } | undefined,
+  noun: 'reply' | 'message'
+): string | undefined {
+  if (commentEvent?.public === false) {
+    return `Zendesk stored this ${noun} as an internal note, so the patient will NOT receive it. Do not resend — ask an admin to check your Zendesk seat.`
+  }
+  if (as === 'self' && sentAs === 'support') {
+    return 'Sent as AlphaMD Support, not under your name — your Zendesk seat cannot author public replies. The patient did receive it.'
+  }
+  return undefined
+}
+
 export async function replyToTicket(options: {
   ticketId: string
   body: string
@@ -118,23 +171,14 @@ export async function replyToTicket(options: {
     return { ok: false, error: 'Zendesk is not configured (ZENDESK_API_TOKEN is unset).' }
   }
 
-  // Asking for `support` skips the lookup entirely: an omitted `author_id` is
-  // what makes Zendesk attribute the comment to the service account.
-  const authorId = as === 'self' ? await publicCapableAuthorId(authorEmail, auth) : null
-  const sentAs: ReplyIdentity = authorId ? 'self' : 'support'
-
-  const comment: { html_body: string; public: true; author_id?: number } = {
-    html_body: toHtml(body.trim()),
-    public: true,
-  }
-  if (authorId) comment.author_id = authorId
+  const { authorId, sentAs } = await commentAuthor(as, authorEmail, auth)
 
   let response: Response
   try {
     response = await fetch(`https://${ZENDESK_DOMAIN}/api/v2/tickets/${ticketId}.json`, {
       method: 'PUT',
       headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ticket: { comment } }),
+      body: JSON.stringify({ ticket: { comment: publicComment(body, authorId) } }),
     })
   } catch (error) {
     return { ok: false, error: `Could not reach Zendesk: ${(error as Error).message}` }
@@ -144,28 +188,89 @@ export async function replyToTicket(options: {
     return { ok: false, error: `Zendesk rejected the reply (${response.status}).` }
   }
 
+  const data = (await response.json()) as { audit?: ZendeskAudit }
+  return {
+    ok: true,
+    sentAs,
+    warning: publicCommentWarning(as, sentAs, commentEventOf(data.audit), 'reply'),
+  }
+}
+
+/**
+ * Open a new ticket whose first comment is the public patient message.
+ *
+ * Same public-comment allowlist as `replyToTicket`: a light-agent seat must not
+ * be named as author, or Zendesk stores the comment internal and the patient
+ * never sees it. The Alpha admin `create-ticket` path skipped that guard;
+ * `create-user-ticket` did not. This follows the guarded one.
+ */
+export async function createTicket(options: {
+  subject: string
+  body: string
+  requesterName: string
+  requesterEmail: string
+  status: string
+  groupId: number
+  authorEmail: string
+  as?: ReplyIdentity
+}): Promise<CreateTicketResult> {
+  const {
+    subject,
+    body,
+    requesterName,
+    requesterEmail,
+    status,
+    groupId,
+    authorEmail,
+    as = 'self',
+  } = options
+
+  if (!body.trim()) return { ok: false, error: 'Message is empty.' }
+  if (!requesterEmail.trim()) return { ok: false, error: 'No email address to send to.' }
+
+  const auth = basicAuth()
+  if (!auth) {
+    return { ok: false, error: 'Zendesk is not configured (ZENDESK_API_TOKEN is unset).' }
+  }
+
+  const { authorId, sentAs } = await commentAuthor(as, authorEmail, auth)
+
+  let response: Response
+  try {
+    response = await fetch(`https://${ZENDESK_DOMAIN}/api/v2/tickets.json`, {
+      method: 'POST',
+      headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ticket: {
+          subject,
+          requester: { name: requesterName, email: requesterEmail },
+          status,
+          group_id: groupId,
+          comment: publicComment(body, authorId),
+        },
+      }),
+    })
+  } catch (error) {
+    return { ok: false, error: `Could not reach Zendesk: ${(error as Error).message}` }
+  }
+
+  if (!response.ok) {
+    return { ok: false, error: `Zendesk rejected the ticket (${response.status}).` }
+  }
+
   const data = (await response.json()) as {
-    audit?: { events?: { type: string; public?: boolean }[] }
+    ticket?: { id?: number }
+    audit?: ZendeskAudit
   }
-  const commentEvent = data.audit?.events?.find((e) => e.type === 'Comment')
-
-  if (commentEvent?.public === false) {
-    return {
-      ok: true,
-      sentAs,
-      warning:
-        'Zendesk stored this reply as an internal note, so the patient will NOT receive it. Do not resend — ask an admin to check your Zendesk seat.',
-    }
+  const ticketId = data.ticket?.id
+  if (!ticketId) {
+    return { ok: false, error: 'Zendesk created a ticket but did not return its id.' }
   }
 
-  if (as === 'self' && sentAs === 'support') {
-    return {
-      ok: true,
-      sentAs,
-      warning:
-        'Sent as AlphaMD Support, not under your name — your Zendesk seat cannot author public replies. The patient did receive it.',
-    }
+  return {
+    ok: true,
+    ticketId,
+    sentAs,
+    warning: publicCommentWarning(as, sentAs, commentEventOf(data.audit), 'message'),
   }
-
-  return { ok: true, sentAs }
 }

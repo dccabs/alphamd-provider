@@ -39,7 +39,7 @@ import {
 } from '@/lib/labReviews/reviewSteps'
 import type { LabProviderOption, ScheduledLabOrder } from '@/lib/labOrders/queries'
 import { describeDecision } from '@/lib/ai/decision'
-import { completeLabReviewAction, saveReviewDraftAction } from '../actions'
+import { saveReviewDraftAction } from '../actions'
 import { ConsultPanel } from './ConsultPanel'
 import { DoseChangePanel } from './DoseChangePanel'
 import { FieldAssistButton } from './FieldAssistButton'
@@ -82,16 +82,6 @@ import type { CatalogMedication, DosageOption, Medication } from './types'
 
 const DEBOUNCE_MS = 1200
 
-/**
- * Whether approving the summary actually finishes the review.
- *
- * Off while the summary itself is what is being reviewed. `finalize` below is the
- * write path and is unchanged — it clears "Needs lab review", may add flags, may
- * move the patient's status and writes a note onto the chart — so switching this
- * on is the whole change, in one line, once the summary reads correctly.
- */
-const APPROVAL_FINISHES: boolean = false
-
 type SaveState =
   | { kind: 'clean' }
   | { kind: 'saving' }
@@ -123,7 +113,9 @@ export function ReviewModal({
   initialDraft,
   draftUpdatedAt,
   onClose,
-  onFinalized,
+  // Kept for the slice that actually finishes the review. This one only sends
+  // the patient message and leaves the review open.
+  onFinalized: _onFinalized,
 }: {
   reviewId: string
   patientName: string
@@ -176,7 +168,6 @@ export function ReviewModal({
   /** Counts edits rather than watching `draft`, so the debounce cannot fire once
    *  on mount for a draft that was only rehydrated, not changed. */
   const [edits, setEdits] = useState(0)
-  const [finalizing, setFinalizing] = useState(false)
   /** The confirmation summary, over the flyout. */
   const [summary, setSummary] = useState(false)
 
@@ -245,23 +236,6 @@ export function ReviewModal({
    *  button and names what is missing, while the server's copy is the one that
    *  actually protects the chart. */
   const problems = validateCompletion(draft)
-
-  /** Reached from the summary's Approve button, and only when finishing is on. */
-  const finalize = async () => {
-    setSummary(false)
-    setFinalizing(true)
-    const result = await completeLabReviewAction(reviewId, JSON.stringify(latest.current))
-    setFinalizing(false)
-
-    if (result.status === 'error') {
-      setSave({ kind: 'error', message: result.message })
-      return
-    }
-
-    // Finished. The draft is now on the review row, so there is nothing pending.
-    unsaved.current = false
-    onFinalized(result.status === 'ok' ? result.warning : undefined)
-  }
 
   const options = dispositionsFor(patientStatus)
   const continuing = draft.disposition === 'continue_protocol'
@@ -454,7 +428,6 @@ export function ReviewModal({
                 value={draft.providerNote}
                 onChange={(providerNote) => update({ providerNote })}
                 recorded={describeDecision(draft, { omit: 'providerNote' })}
-                disabled={finalizing}
               />
             }
           >
@@ -480,7 +453,6 @@ export function ReviewModal({
                 value={draft.csInstructions}
                 onChange={(csInstructions) => update({ csInstructions })}
                 recorded={describeDecision(draft, { omit: 'csInstructions' })}
-                disabled={finalizing}
               />
             }
           >
@@ -516,7 +488,6 @@ export function ReviewModal({
                 onChange={(patientMessage) => update({ patientMessage })}
                 recorded={describeDecision(draft, { omit: 'patientMessage' })}
                 firstName={patientFirstName}
-                disabled={finalizing}
               />
             }
           >
@@ -552,15 +523,15 @@ export function ReviewModal({
             </p>
           )}
           <div className="flex items-center justify-between gap-2.5">
-            <Button variant="outline" onClick={close} disabled={finalizing}>
+            <Button variant="outline" onClick={close}>
               Close
             </Button>
             <Button
               onClick={() => setSummary(true)}
-              disabled={finalizing || problems.length > 0 || !settled}
+              disabled={problems.length > 0 || !settled}
               title={problems.length ? problems.join(' ') : undefined}
             >
-              {finalizing ? 'Finalizing…' : 'Finalize lab review'}
+              Finalize lab review
             </Button>
           </div>
         </div>
@@ -569,12 +540,12 @@ export function ReviewModal({
             precondition: it plans the completion to show it. */}
         {summary && (
           <FinalizeSummaryDialog
+            reviewId={reviewId}
             draft={draft}
             patientName={patientName}
             patientEmail={patientEmail}
             providerName={providerName}
             onEdit={() => setSummary(false)}
-            onApprove={APPROVAL_FINISHES ? finalize : null}
           />
         )}
       </DialogContent>

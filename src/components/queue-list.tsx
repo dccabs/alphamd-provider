@@ -9,8 +9,9 @@ import { progressOf, queueRowMeta, type QueueRow } from '@/lib/labReviews/queueR
  * The lab-review queue as a list of rows.
  *
  * Shared by the dashboard and `/lab-reviews` so the two can never describe the
- * same review differently. Each row answers, in order: who is this, what kind of
- * patient are they, is anyone working on it, and how fresh is that work.
+ * same review differently. Each row answers, in order: who is this, how to reach
+ * them, what kind of patient are they, is anyone working on it, and how fresh is
+ * that work.
  *
  * `numbered` matches the queue page's position column, which lines up with the
  * "Review N of M" pill on the detail screen.
@@ -61,6 +62,12 @@ export function QueueList({
                     <Badge variant="secondary">Summary {review.summaryStatus}</Badge>
                   )}
                 </span>
+
+                {review.patientEmail && (
+                  <span className="mt-0.5 block text-xs text-muted-foreground">
+                    {review.patientEmail}
+                  </span>
+                )}
 
                 <span className="mt-1 block text-xs text-muted-foreground">
                   {queueRowMeta(review).join(' · ')}

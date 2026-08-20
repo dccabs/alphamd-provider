@@ -53,6 +53,7 @@ const eslintConfig = defineConfig([
       "src/app/**/layout.tsx",
       "src/app/**/route.ts",
       "src/app/**/actions.ts",
+      "src/app/**/search-actions.ts",
     ],
     rules: { "no-restricted-imports": "off" },
   },
