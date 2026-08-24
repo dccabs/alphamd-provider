@@ -36,6 +36,14 @@ import {
   writeLabReviewChartNote,
   type ChartNoteSendResult,
 } from '@/lib/labReviews/chartNoteSend'
+import {
+  placeLabReviewOrders,
+  type LabOrderSendResult,
+} from '@/lib/labReviews/labOrderSend'
+import {
+  sendLabReviewConsultation,
+  type ConsultSendResult,
+} from '@/lib/labReviews/consultSend'
 import { isReplyIdentity, type ReplyIdentity } from '@/lib/labReviews/replyIdentity'
 import { replyToTicket } from '@/lib/zendesk'
 import type { WriteState } from './state'
@@ -225,6 +233,42 @@ export async function writeLabReviewChartNoteAction(
   }
 
   return writeLabReviewChartNote(access.access, reviewId, parseDraft(parsed), snapshotId)
+}
+
+/** Place staged lab orders without finishing the review. */
+export async function placeLabReviewOrdersAction(
+  reviewId: string,
+  draftJson: string
+): Promise<LabOrderSendResult> {
+  const access = await checkProviderAccess()
+  if (!access.ok) return { status: 'error', message: DENIED }
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(draftJson)
+  } catch {
+    return { status: 'error', message: 'Could not read the review.' }
+  }
+
+  return placeLabReviewOrders(access.access, reviewId, parseDraft(parsed).labOrders)
+}
+
+/** Email the staged consultation invitation without finishing the review. */
+export async function sendLabReviewConsultationAction(
+  reviewId: string,
+  draftJson: string
+): Promise<ConsultSendResult> {
+  const access = await checkProviderAccess()
+  if (!access.ok) return { status: 'error', message: DENIED }
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(draftJson)
+  } catch {
+    return { status: 'error', message: 'Could not read the review.' }
+  }
+
+  return sendLabReviewConsultation(access.access, reviewId, parseDraft(parsed).consultation)
 }
 
 export async function previewProtocolAction(draftJson: string): Promise<ProtocolOutcome | null> {

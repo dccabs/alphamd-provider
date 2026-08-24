@@ -8,6 +8,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { logLabReviewEvent, resolveActor } from '@/lib/labReviews/events'
 import { eventTypeById } from './eventTypes.ts'
 import { INVITE_FROM, consultationInvite } from './inviteEmail.ts'
+import { renderConsultationInviteHtml } from './inviteEmailHtml'
 import { needsLink, validateConsultRequest, type ConsultRequest } from './request.ts'
 
 /**
@@ -183,7 +184,6 @@ export async function requestConsultation(
     firstName: subject.firstName,
     bookingUrl: bookingUrl.url,
     eventTypeName: eventType.name,
-    message: input.message,
   })
 
   const sent = await sendPauboxEmail({
@@ -191,7 +191,11 @@ export async function requestConsultation(
     to: subject.email,
     subject: invite.subject,
     text: invite.text,
-    html: invite.html,
+    html: await renderConsultationInviteHtml({
+      firstName: subject.firstName,
+      bookingUrl: bookingUrl.url,
+      eventTypeName: eventType.name,
+    }),
   })
   if (!sent.ok) {
     return {

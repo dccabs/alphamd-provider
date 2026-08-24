@@ -13,6 +13,7 @@ import {
   isReviewStep,
   isSettled,
   openStep,
+  pinnedOpenStep,
   parseSkippedSteps,
   stepSummary,
   stepsFor,
@@ -161,6 +162,19 @@ test('a step is settled by content or by a recorded skip', () => {
 })
 
 // --- where the provider is --------------------------------------------------
+
+test('a character in the open chart note does not move the flyout on', () => {
+  // They skipped here, then typed. `openStep` has already moved to customer
+  // service, because the note now has content. The flyout has to stay put
+  // until they press Continue — otherwise the box they are typing in collapses.
+  const typing = draft({
+    disposition: 'follow_up_needed',
+    skippedSteps: ['newMedications', 'labOrders', 'consultation'],
+    providerNote: 'd',
+  })
+  assert.equal(openStep(typing), 'csInstructions')
+  assert.equal(pinnedOpenStep(typing, 'providerNote'), 'providerNote')
+})
 
 test('the open step is the first applicable one not settled', () => {
   const started = draft({ disposition: 'dose_change' })

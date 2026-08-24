@@ -442,10 +442,10 @@ export async function completeLabReview(
  * Mark the review finished after Approve has already sent the protocol, the
  * patient message, the customer service action, and the chart note.
  *
- * Those writes must not run again here — a second protocol email or a second
- * completion note is the failure this exists to prevent. What remains is the
- * review row, any labs or consultation still sitting on the draft, and a
- * patient-status change the earlier slices do not own.
+ * Those writes must not run again here — a second protocol email, chart note,
+ * lab order, or consultation invitation is the failure this exists to prevent.
+ * What remains is the review row and a patient-status change the earlier
+ * slices do not own.
  */
 export async function closeLabReview(
   access: ProviderAccess,
@@ -464,14 +464,6 @@ export async function closeLabReview(
   if (review.assignedTo && review.assignedTo !== access.userId) {
     const holder = await nameOf(review.assignedTo)
     return { ok: false, error: `${holder} holds this review. It cannot be finished from here.` }
-  }
-
-  const preflight = [
-    ...(await labOrderProblems(review.patientId, draft.labOrders)),
-    ...(await consultProblems(review.patientId, draft.consultation)),
-  ]
-  if (preflight.length) {
-    return { ok: false, error: `${preflight.join(' ')} Nothing has been saved.` }
   }
 
   const admin = createAdminClient()
@@ -503,8 +495,6 @@ export async function closeLabReview(
   }
 
   const warnings = await applyClosingEffects(access, review.patientId, plan)
-  warnings.push(...(await placeLabOrders(access, reviewId, draft.labOrders)))
-  warnings.push(...(await sendConsultInvite(access, reviewId, draft.consultation)))
 
   const logged = await logLabReviewEvent({
     labReviewId: reviewId,

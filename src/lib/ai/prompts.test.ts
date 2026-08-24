@@ -292,6 +292,8 @@ describe('chart summary prompts', () => {
     assert.match(prompt, /Do not repeat it/)
     assert.match(prompt, /two to four sentences/)
     assert.match(prompt, /Do not paste the email/)
+    assert.match(prompt, /Labs ordered or a consultation requested/)
+    assert.match(prompt, /do not drop them/)
     assert.match(prompt, /Only facts from the events/)
   })
 

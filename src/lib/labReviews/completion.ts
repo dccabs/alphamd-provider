@@ -379,7 +379,8 @@ function protocolInstructions(protocol: ProtocolOutcome | null): string[] {
  * be a prescription. `chart` is literally the note `planCompletion` writes.
  *
  * The chart is the provider's own note plus a short summary of what else
- * happened. The patient and customer service texts stay their own documents.
+ * happened, then a line each for labs or a consultation when those actually
+ * go out. The patient and customer service texts stay their own documents.
  */
 export type ReviewAudiences = {
   /** Verbatim what the patient is sent. Empty when nothing was written. */
@@ -480,6 +481,21 @@ export function completionEvents(
   return lines.join('\n')
 }
 
+/**
+ * Lab orders and a consultation, as they should appear on the chart note.
+ *
+ * The AI summary is written from the events and can drop these to stay short.
+ * Appended after it so a review that actually placed labs or sent a booking
+ * link still says so on the chart. Empty when neither was chosen.
+ */
+export function chartActionLines(draft: ReviewDraft): string[] {
+  const lines = draft.labOrders.map((order) => `Labs ordered: ${orderLine(order)}`)
+  if (draft.consultation) {
+    lines.push(`Consultation requested: ${consultLine(draft.consultation)}`)
+  }
+  return lines
+}
+
 export function planCompletion(
   draft: ReviewDraft,
   providerName: string,
@@ -527,7 +543,11 @@ export function planCompletion(
 
   const events = completionEvents(draft, providerName, protocol, label)
   const fallback = `Lab review completed by ${providerName}. Disposition: ${label}.`
-  const note = [draft.providerNote.trim(), draft.chartSummary.trim() || fallback]
+  const note = [
+    draft.providerNote.trim(),
+    draft.chartSummary.trim() || fallback,
+    ...chartActionLines(draft),
+  ]
     .filter(Boolean)
     .join('\n\n')
 

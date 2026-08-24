@@ -61,6 +61,11 @@ type Props = {
    *  belongs. Everywhere else the draft says "the patient". */
   firstName?: string | null
   disabled?: boolean
+  /** Defaults to "Use AI". The finalize warning asks to "Suggest a message". */
+  label?: string
+  /** Defaults to "Use this draft". */
+  acceptLabel?: string
+  variant?: 'ghost' | 'outline'
 }
 
 export function FieldAssistButton({
@@ -70,6 +75,9 @@ export function FieldAssistButton({
   recorded,
   firstName,
   disabled,
+  label: buttonLabel = 'Use AI',
+  acceptLabel = 'Use this draft',
+  variant = 'ghost',
 }: Props) {
   const [open, setOpen] = useState(false)
   /** Which half of the modal is on screen: the direction, or what came back. */
@@ -199,14 +207,14 @@ export function FieldAssistButton({
 
       <Button
         type="button"
-        variant="ghost"
-        size="xs"
+        variant={variant}
+        size={variant === 'outline' ? 'sm' : 'xs'}
         onClick={() => setOpen(true)}
         disabled={disabled}
         aria-label={`Draft ${label.toLowerCase()} with AI`}
       >
         <SparklesIcon />
-        Use AI
+        {buttonLabel}
       </Button>
 
       <Dialog
@@ -348,7 +356,7 @@ export function FieldAssistButton({
                   Change instructions
                 </Button>
                 <Button onClick={accept} disabled={!hasDraft}>
-                  Use this draft
+                  {acceptLabel}
                 </Button>
               </>
             ) : (

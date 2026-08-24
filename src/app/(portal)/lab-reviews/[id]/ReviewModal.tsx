@@ -31,6 +31,7 @@ import {
   hasContent,
   isSettled,
   openStep,
+  pinnedOpenStep,
   stepSummary,
   stepsFor,
   withSkip,
@@ -170,14 +171,14 @@ export function ReviewModal({
   const [summary, setSummary] = useState(false)
 
   /**
-   * A settled step the provider has clicked back into, which wins over
-   * `openStep`.
+   * Where the provider is looking. Wins over `openStep`, which treats any
+   * content as settled — one character in the chart note would otherwise
+   * collapse the box they are still typing in.
    *
    * Held here rather than in the draft because it is a cursor, not a decision:
-   * where somebody is looking is not worth a round trip, and reopening the flyout
-   * on the first outstanding step is the right place to land anyway.
+   * where somebody is looking is not worth a round trip.
    */
-  const [reopened, setReopened] = useState<ReviewStepId | null>(null)
+  const [pin, setPin] = useState<ReviewStepId | null>(() => openStep(initialDraft))
 
   // The debounce timer and the close handler both need whatever the newest draft
   // is at the moment they run, not the one captured when they were created.
@@ -239,10 +240,7 @@ export function ReviewModal({
   const continuing = draft.disposition === 'continue_protocol'
 
   const steps = stepsFor(draft)
-  /** Where the provider is: a step they clicked back into, or the first
-   *  outstanding one. A reopened step that has since been settled elsewhere is
-   *  ignored, so this can never point at a step that is no longer in the list. */
-  const current = reopened && steps.includes(reopened) ? reopened : openStep(draft)
+  const current = pinnedOpenStep(draft, pin)
   const settled = allSettled(draft)
 
   const stateOf = (step: ReviewStepId): 'hidden' | 'open' | 'settled' => {
@@ -264,8 +262,9 @@ export function ReviewModal({
    */
   const advance = (step: ReviewStepId) => {
     const at = latest.current
-    update({ skippedSteps: hasContent(step, at) ? withoutSkip(at, step) : withSkip(at, step) })
-    setReopened(null)
+    const skippedSteps = hasContent(step, at) ? withoutSkip(at, step) : withSkip(at, step)
+    update({ skippedSteps })
+    setPin(openStep({ ...at, skippedSteps }))
   }
 
   /** The plain props every step shares, so the seven call sites below stay
@@ -346,7 +345,10 @@ export function ReviewModal({
                   key={option}
                   option={option}
                   selected={draft.disposition === option}
-                  onSelect={() => update({ disposition: option })}
+                  onSelect={() => {
+                    update({ disposition: option })
+                    setPin(openStep({ ...latest.current, disposition: option }))
+                  }}
                 />
               ))}
             </div>
@@ -355,7 +357,7 @@ export function ReviewModal({
           {/* Stays in the list under another disposition while changes are still
               recorded, because completion refuses them there and this is the only
               place they can be removed. */}
-          <ReviewStep {...stepProps('doseChanges')} onOpen={setReopened} onAdvance={advance}>
+          <ReviewStep {...stepProps('doseChanges')} onOpen={setPin} onAdvance={advance}>
             <DoseChangePanel
               medications={medications}
               dosageOptions={dosageOptions}
@@ -369,7 +371,7 @@ export function ReviewModal({
               starting something new is one decision, and a provider who has
               picked "Dose change" still has to be able to record the second half
               of it. */}
-          <ReviewStep {...stepProps('newMedications')} onOpen={setReopened} onAdvance={advance}>
+          <ReviewStep {...stepProps('newMedications')} onOpen={setPin} onAdvance={advance}>
             <NewMedicationPanel
               catalog={catalog}
               medications={medications}
@@ -382,7 +384,7 @@ export function ReviewModal({
 
           {/* Under every disposition, including "continue protocol": labs on an
               interval are how continuing as designed gets checked. */}
-          <ReviewStep {...stepProps('labOrders')} onOpen={setReopened} onAdvance={advance}>
+          <ReviewStep {...stepProps('labOrders')} onOpen={setPin} onAdvance={advance}>
             <LabOrdersPanel
               patientState={patientState}
               providers={labProviders}
@@ -397,7 +399,7 @@ export function ReviewModal({
           {/* Also under every disposition, and next to the labs because the two
               are the same kind of decision: something the patient has to do,
               which the review sends them when it is approved. */}
-          <ReviewStep {...stepProps('consultation')} onOpen={setReopened} onAdvance={advance}>
+          <ReviewStep {...stepProps('consultation')} onOpen={setPin} onAdvance={advance}>
             <ConsultPanel
               reviewId={reviewId}
               patientEmail={patientEmail}
@@ -414,7 +416,7 @@ export function ReviewModal({
               the customer service hand-off have something to relay. */}
           <ReviewStep
             {...stepProps('providerNote')}
-            onOpen={setReopened}
+            onOpen={setPin}
             onAdvance={advance}
             // Only this half of the note is ever drafted: the structured half —
             // the disposition, the doses, the medications added — is composed at
@@ -443,7 +445,7 @@ export function ReviewModal({
 
           <ReviewStep
             {...stepProps('csInstructions')}
-            onOpen={setReopened}
+            onOpen={setPin}
             onAdvance={advance}
             action={
               <FieldAssistButton
@@ -473,7 +475,7 @@ export function ReviewModal({
               review ends on, written once every other decision is made. */}
           <ReviewStep
             {...stepProps('patientMessage')}
-            onOpen={setReopened}
+            onOpen={setPin}
             onAdvance={advance}
             // The only field given the patient's name, because it is the only one
             // addressed to them. The chart note and the customer service box are
@@ -520,6 +522,12 @@ export function ReviewModal({
                 : 'Choose a disposition to begin.'}
             </p>
           )}
+          {settled && !draft.patientMessage.trim() && (
+            <p className="text-xs font-medium text-destructive">
+              NO Patient Message — the patient will not hear from you about this
+              review.
+            </p>
+          )}
           <div className="flex items-center justify-between gap-2.5">
             <Button variant="outline" onClick={close}>
               Close
@@ -542,9 +550,11 @@ export function ReviewModal({
             draft={draft}
             patientName={patientName}
             patientEmail={patientEmail}
+            patientFirstName={patientFirstName}
             providerName={providerName}
             onEdit={() => setSummary(false)}
             onChartSummary={(chartSummary) => update({ chartSummary })}
+            onPatientMessage={(patientMessage) => update({ patientMessage })}
             onFinished={() => onFinalized()}
           />
         )}

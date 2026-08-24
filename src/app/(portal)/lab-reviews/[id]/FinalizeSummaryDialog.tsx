@@ -17,17 +17,22 @@ import { consultLine } from '@/lib/consultations/request'
 import { orderLine, scheduledDateFor } from '@/lib/labOrders/order'
 import { FLAG_LABELS, PATIENT_STATUS_LABELS } from '@/lib/labReviews/clinicalIds'
 import {
+  chartActionLines,
   planCompletion,
   reviewAudiences,
   type ProtocolOutcome,
 } from '@/lib/labReviews/completion'
 import { shortDate } from '@/lib/labReviews/format'
+import { describeDecision } from '@/lib/ai/decision'
 import { DISPOSITION_LABELS, type ReviewDraft } from '@/lib/labReviews/reviewDraft'
+import { FieldAssistButton } from './FieldAssistButton'
 import { REPLY_IDENTITY_LABELS, type ReplyIdentity } from '@/lib/labReviews/replyIdentity'
 import {
   applyLabReviewFollowUpAction,
   closeLabReviewAction,
+  placeLabReviewOrdersAction,
   previewProtocolAction,
+  sendLabReviewConsultationAction,
   sendPatientLabReviewMessageAction,
   sendRecommendedProtocolAction,
   writeLabReviewChartNoteAction,
@@ -91,6 +96,20 @@ type ChartNoteSend =
   | { status: 'written'; warning?: string }
   | { status: 'error'; message: string }
 
+type LabOrderSend =
+  | { status: 'idle' }
+  | { status: 'creating' }
+  | { status: 'skipped' }
+  | { status: 'placed'; count: number; warning?: string }
+  | { status: 'error'; message: string }
+
+type ConsultSend =
+  | { status: 'idle' }
+  | { status: 'creating' }
+  | { status: 'skipped' }
+  | { status: 'sent'; warning?: string }
+  | { status: 'error'; message: string }
+
 type CloseSend =
   | { status: 'idle' }
   | { status: 'creating' }
@@ -110,9 +129,11 @@ export function FinalizeSummaryDialog({
   draft,
   patientName,
   patientEmail,
+  patientFirstName,
   providerName,
   onEdit,
   onChartSummary,
+  onPatientMessage,
   onFinished,
 }: {
   reviewId: string
@@ -121,10 +142,13 @@ export function FinalizeSummaryDialog({
   /** Where a consultation invitation would be sent, named here because approving
    *  is what sends it. */
   patientEmail: string | null
+  /** The name the patient message is addressed with. */
+  patientFirstName: string | null
   /** The name the chart note will be signed with. */
   providerName: string
   onEdit: () => void
   onChartSummary: (chartSummary: string) => void
+  onPatientMessage: (patientMessage: string) => void
   onFinished: () => void
 }) {
   const [phase, setPhase] = useState<ApprovalPhase>('preview')
@@ -132,6 +156,8 @@ export function FinalizeSummaryDialog({
   const [protocolSend, setProtocolSend] = useState<ProtocolSend>({ status: 'idle' })
   const [followUpSend, setFollowUpSend] = useState<FollowUpSend>({ status: 'idle' })
   const [chartNoteSend, setChartNoteSend] = useState<ChartNoteSend>({ status: 'idle' })
+  const [labOrderSend, setLabOrderSend] = useState<LabOrderSend>({ status: 'idle' })
+  const [consultSend, setConsultSend] = useState<ConsultSend>({ status: 'idle' })
   const [closeSend, setCloseSend] = useState<CloseSend>({ status: 'idle' })
   const quote = useProtocolPreview(draft)
   const protocolForSummary = quote.state === 'ready' ? quote.outcome : null
@@ -153,6 +179,8 @@ export function FinalizeSummaryDialog({
     protocolSend.status === 'creating' ||
     followUpSend.status === 'creating' ||
     chartNoteSend.status === 'creating' ||
+    labOrderSend.status === 'creating' ||
+    consultSend.status === 'creating' ||
     closeSend.status === 'creating'
   const canGoBack = phase === 'preview' && !sending
   const canRetry =
@@ -160,6 +188,8 @@ export function FinalizeSummaryDialog({
     protocolSend.status === 'error' ||
     followUpSend.status === 'error' ||
     chartNoteSend.status === 'error' ||
+    labOrderSend.status === 'error' ||
+    consultSend.status === 'error' ||
     closeSend.status === 'error'
 
   // Nothing is rendered until the pricing is known, rather than rendering the
@@ -234,7 +264,12 @@ export function FinalizeSummaryDialog({
     const sendPatient = patientSend.status === 'idle' || patientSend.status === 'error'
     const sendFollowUp = followUpSend.status === 'idle' || followUpSend.status === 'error'
     const sendChartNote = chartNoteSend.status === 'idle' || chartNoteSend.status === 'error'
+    const sendLabs = labOrderSend.status === 'idle' || labOrderSend.status === 'error'
+    const sendConsult = consultSend.status === 'idle' || consultSend.status === 'error'
     const sendClose = closeSend.status === 'idle' || closeSend.status === 'error'
+    // Read from the last successful send, not React state — `setProtocolSend`
+    // below does not update `protocolSend` before the chart-note step runs.
+    let snapshotId = protocolSend.status === 'sent' ? protocolSend.snapshotId : null
 
     if (sendProtocolNow) {
       if (!protocol) {
@@ -249,6 +284,7 @@ export function FinalizeSummaryDialog({
         if (result.status === 'skipped') setProtocolSend({ status: 'skipped' })
         else if (result.status === 'handed-off') setProtocolSend({ status: 'handed-off' })
         else {
+          snapshotId = result.snapshotId
           setProtocolSend({
             status: 'sent',
             snapshotId: result.snapshotId,
@@ -301,7 +337,6 @@ export function FinalizeSummaryDialog({
 
     if (sendChartNote) {
       setChartNoteSend({ status: 'creating' })
-      const snapshotId = protocolSend.status === 'sent' ? protocolSend.snapshotId : null
       const result = await writeLabReviewChartNoteAction(
         reviewId,
         JSON.stringify(draft),
@@ -312,6 +347,46 @@ export function FinalizeSummaryDialog({
         return
       }
       setChartNoteSend({ status: 'written', warning: result.warning })
+      await pause(320)
+    }
+
+    if (sendLabs) {
+      if (draft.labOrders.length === 0) {
+        setLabOrderSend({ status: 'skipped' })
+      } else {
+        setLabOrderSend({ status: 'creating' })
+        const result = await placeLabReviewOrdersAction(reviewId, JSON.stringify(draft))
+        if (result.status === 'error') {
+          setLabOrderSend({ status: 'error', message: result.message })
+          return
+        }
+        if (result.status === 'skipped') setLabOrderSend({ status: 'skipped' })
+        else {
+          setLabOrderSend({
+            status: 'placed',
+            count: result.count,
+            warning: result.warning,
+          })
+        }
+      }
+      await pause(320)
+    }
+
+    if (sendConsult) {
+      if (!draft.consultation) {
+        setConsultSend({ status: 'skipped' })
+      } else {
+        setConsultSend({ status: 'creating' })
+        const result = await sendLabReviewConsultationAction(reviewId, JSON.stringify(draft))
+        if (result.status === 'error') {
+          setConsultSend({ status: 'error', message: result.message })
+          return
+        }
+        if (result.status === 'skipped') setConsultSend({ status: 'skipped' })
+        else {
+          setConsultSend({ status: 'sent', warning: result.warning })
+        }
+      }
       await pause(320)
     }
 
@@ -369,6 +444,9 @@ export function FinalizeSummaryDialog({
               patient={patientSend}
               followUp={followUpSend}
               chart={chartNoteSend}
+              labs={labOrderSend}
+              consult={consultSend}
+              labCount={draft.labOrders.length}
               close={closeSend}
               finished={phase === 'done'}
             />
@@ -452,12 +530,22 @@ export function FinalizeSummaryDialog({
           {/* Named by reader rather than by field. The chart is the provider's
               own note plus a short summary of what else happened — not a paste
               of the other two documents. */}
-          <Destination
-            title="THE PATIENT RECEIVES"
-            text={audiences.patient}
-            empty="Nothing written — the patient will not hear from you about this review."
-            status={<PatientSendStatus send={patientSend} />}
-          />
+          {!draft.patientMessage.trim() && (
+            <NoPatientMessageWarning
+              draft={draft}
+              firstName={patientFirstName}
+              onInsert={onPatientMessage}
+            />
+          )}
+
+          {(draft.patientMessage.trim() || audiences.patient.trim()) && (
+            <Destination
+              title="THE PATIENT RECEIVES"
+              text={audiences.patient}
+              empty="Nothing written — the patient will not hear from you about this review."
+              status={<PatientSendStatus send={patientSend} />}
+            />
+          )}
 
           <Destination
             title="CUSTOMER SERVICE RECEIVES"
@@ -473,6 +561,7 @@ export function FinalizeSummaryDialog({
                 ? summary.streaming
                 : draft.chartSummary
             }
+            actionLines={chartActionLines(draft)}
             snapshotLine={
               protocol?.kind === 'quote'
                 ? 'Pricing snapshot: linked when the protocol is sent'
@@ -613,6 +702,7 @@ function useChartSummary({
 function ChartRecords({
   providerNote,
   summary,
+  actionLines,
   snapshotLine,
   generating,
   generated,
@@ -622,6 +712,7 @@ function ChartRecords({
 }: {
   providerNote: string
   summary: string
+  actionLines: string[]
   snapshotLine?: string | null
   generating: boolean
   generated: boolean
@@ -655,6 +746,14 @@ function ChartRecords({
           Writing a short summary of everything else…
         </p>
       ) : null}
+      {actionLines.map((line) => (
+        <p
+          key={line}
+          className="rounded-lg border bg-muted/40 px-3 py-2.5 text-[13px] leading-relaxed"
+        >
+          {line}
+        </p>
+      ))}
       {snapshotLine && (
         <p className="text-[13px] leading-relaxed text-muted-foreground">{snapshotLine}</p>
       )}
@@ -703,6 +802,9 @@ function ApprovalProgress({
   patient,
   followUp,
   chart,
+  labs,
+  consult,
+  labCount,
   close,
   finished,
 }: {
@@ -710,9 +812,13 @@ function ApprovalProgress({
   patient: PatientSend
   followUp: FollowUpSend
   chart: ChartNoteSend
+  labs: LabOrderSend
+  consult: ConsultSend
+  labCount: number
   close: CloseSend
   finished: boolean
 }) {
+  const manyLabs = (labs.status === 'placed' ? labs.count : labCount) !== 1
   const rows: ProgressRow[] = [
     {
       key: 'protocol',
@@ -777,6 +883,40 @@ function ApprovalProgress({
               ? 'error'
               : 'done',
       detail: chart.status === 'error' ? chart.message : undefined,
+    },
+    {
+      key: 'labs',
+      running: manyLabs ? 'Lab orders being placed' : 'Lab order being placed',
+      done: manyLabs ? 'Lab orders placed' : 'Lab order placed',
+      skipped: 'No lab order to place',
+      state:
+        labs.status === 'idle'
+          ? 'waiting'
+          : labs.status === 'creating'
+            ? 'running'
+            : labs.status === 'error'
+              ? 'error'
+              : labs.status === 'skipped'
+                ? 'skipped'
+                : 'done',
+      detail: labs.status === 'error' ? labs.message : labs.status === 'placed' ? labs.warning : undefined,
+    },
+    {
+      key: 'consult',
+      running: 'Consultation invitation being sent',
+      done: 'Consultation invitation sent',
+      skipped: 'No consultation to send',
+      state:
+        consult.status === 'idle'
+          ? 'waiting'
+          : consult.status === 'creating'
+            ? 'running'
+            : consult.status === 'error'
+              ? 'error'
+              : consult.status === 'skipped'
+                ? 'skipped'
+                : 'done',
+      detail: consult.status === 'error' ? consult.message : consult.status === 'sent' ? consult.warning : undefined,
     },
     {
       key: 'close',
@@ -927,6 +1067,39 @@ function ProtocolSection({
       </div>
       {status}
     </Section>
+  )
+}
+
+function NoPatientMessageWarning({
+  draft,
+  firstName,
+  onInsert,
+}: {
+  draft: ReviewDraft
+  firstName: string | null
+  onInsert: (patientMessage: string) => void
+}) {
+  return (
+    <div
+      role="status"
+      className="flex flex-col gap-2 rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2.5"
+    >
+      <p className="text-[13px] font-semibold text-destructive">NO Patient Message</p>
+      <p className="text-xs text-muted-foreground">
+        The patient will not hear from you about this review. Suggest a message
+        from what you already recorded, then insert it if it is right.
+      </p>
+      <FieldAssistButton
+        field="patientMessage"
+        value=""
+        onChange={onInsert}
+        recorded={describeDecision(draft, { omit: 'patientMessage' })}
+        firstName={firstName}
+        label="Suggest a message"
+        acceptLabel="Insert this message"
+        variant="outline"
+      />
+    </div>
   )
 }
 

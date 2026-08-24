@@ -372,6 +372,31 @@ test('the written note is the provider’s words plus the summary, nothing else'
   assert.match(plan.events, /New medication: Testosterone cypionate/)
   assert.doesNotMatch(plan.note, /New medication:/)
   assert.doesNotMatch(plan.note, /Your labs look good/)
+  assert.doesNotMatch(plan.note, /Labs ordered:/)
+  assert.doesNotMatch(plan.note, /Consultation requested:/)
+})
+
+test('labs and a consultation follow the summary on the note when they happen', () => {
+  const plan = planCompletion(
+    draft({
+      disposition: 'follow_up_needed',
+      providerNote: 'Hematocrit is up; redraw and talk it through.',
+      chartSummary: 'Follow-up needed. The patient was emailed findings.',
+      labOrders: [labs()],
+      consultation: consult(),
+    }),
+    'Dr Smith'
+  )
+
+  assert.equal(
+    plan.note,
+    [
+      'Hematocrit is up; redraw and talk it through.',
+      'Follow-up needed. The patient was emailed findings.',
+      'Labs ordered: Now — CBC (85025)',
+      'Consultation requested: AlphaMD Provider, Secondary Follow-Up · 15 minutes',
+    ].join('\n\n')
+  )
 })
 
 test('the chart records that the patient was emailed, not the email itself', () => {
@@ -740,6 +765,10 @@ test('a requested consultation reaches the chart, the hand-off and the record', 
     plan.events,
     /Consultation requested: AlphaMD Provider, Secondary Follow-Up · 15 minutes/
   )
+  assert.match(
+    plan.note,
+    /Consultation requested: AlphaMD Provider, Secondary Follow-Up · 15 minutes/
+  )
   // Customer service does not arrange it, but they are who the patient asks why
   // a booking link arrived.
   assert.match(plan.events, /For customer service: Consultation — the patient is emailed a booking link/)
@@ -796,6 +825,10 @@ test('an ordered lab reaches the chart, the hand-off and the record', () => {
   assert.match(plan.events, /Labs ordered: Now — CBC \(85025\), CMP \(80053\)/)
   assert.match(plan.events, /For customer service: Labs ordered — Now — CBC \(85025\)/)
   assert.match(plan.events, /nothing to do here unless they ask about it/)
+  // On the note itself, not only in the events the summary is written from —
+  // a four-sentence wrap-up can drop this, and the chart would then not say
+  // the draw happened.
+  assert.match(plan.note, /Labs ordered: Now — CBC \(85025\), CMP \(80053\)/)
   // Kept whole, so a later reader can see what the review decided to send even
   // if the requisition that went out disagrees.
   assert.deepEqual(plan.detail.labOrders, [order])

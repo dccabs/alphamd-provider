@@ -138,6 +138,23 @@ export function openStep(draft: ReviewDraft): ReviewStepId | null {
 }
 
 /**
+ * The step the flyout should keep open.
+ *
+ * `openStep` treats any content as settled, which is right for Finalize and
+ * wrong for the cursor: one character in the chart note is not a decision to
+ * leave it. `pin` is where they are looking — Continue / Skip moves it, a
+ * keystroke does not.
+ */
+export function pinnedOpenStep(
+  draft: ReviewDraft,
+  pin: ReviewStepId | null
+): ReviewStepId | null {
+  const steps = stepsFor(draft)
+  if (pin && steps.includes(pin)) return pin
+  return openStep(draft)
+}
+
+/**
  * Whether the review has been worked all the way through.
  *
  * Tests the disposition separately rather than leaning on `openStep`, which is

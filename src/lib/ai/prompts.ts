@@ -312,7 +312,7 @@ COVER, in two to four sentences, whatever the events include:
 - Medications added or changed, by name and dose — not the pharmacy instruction unless that is the only way the dose is stated.
 - That the patient was emailed findings, if they were. Do not paste the email.
 - A recommended protocol or quote, if one went out, including the total if given.
-- Labs ordered or a consultation requested, if any.
+- Labs ordered or a consultation requested, if any. Say so; do not drop them to stay short.
 - That customer service was handed follow-up, if they were. Do not paste their instruction block.
 
 RULES:
