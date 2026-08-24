@@ -752,7 +752,7 @@ test('the structured detail keeps blanks as null rather than empty strings', () 
   assert.equal(plan.detail.disposition, 'continue_protocol')
 })
 
-test('a requested consultation reaches the chart, the hand-off and the record', () => {
+test('a requested consultation reaches the chart and the record, not customer service', () => {
   const plan = planCompletion(
     draft({
       disposition: 'follow_up_needed',
@@ -769,10 +769,7 @@ test('a requested consultation reaches the chart, the hand-off and the record', 
     plan.note,
     /Consultation requested: AlphaMD Provider, Secondary Follow-Up · 15 minutes/
   )
-  // Customer service does not arrange it, but they are who the patient asks why
-  // a booking link arrived.
-  assert.match(plan.events, /For customer service: Consultation — the patient is emailed a booking link/)
-  assert.match(plan.events, /They book it themselves\./)
+  assert.doesNotMatch(plan.events, /For customer service:/)
   assert.deepEqual(plan.detail.consultation, {
     eventTypeId: FOLLOW_UP,
     eventTypeName: 'AlphaMD Provider, Secondary Follow-Up',
@@ -815,7 +812,7 @@ test('labs outrank a consultation in the resolution', () => {
   )
 })
 
-test('an ordered lab reaches the chart, the hand-off and the record', () => {
+test('an ordered lab reaches the chart and the record, not customer service', () => {
   const order = labs({ testCodes: ['cbc_85025', 'cmp_80053'], requiredCodes: ['cbc_85025'] })
   const plan = planCompletion(
     draft({ disposition: 'continue_protocol', labOrders: [order] }),
@@ -823,8 +820,7 @@ test('an ordered lab reaches the chart, the hand-off and the record', () => {
   )
 
   assert.match(plan.events, /Labs ordered: Now — CBC \(85025\), CMP \(80053\)/)
-  assert.match(plan.events, /For customer service: Labs ordered — Now — CBC \(85025\)/)
-  assert.match(plan.events, /nothing to do here unless they ask about it/)
+  assert.doesNotMatch(plan.events, /For customer service:/)
   // On the note itself, not only in the events the summary is written from —
   // a four-sentence wrap-up can drop this, and the chart would then not say
   // the draw happened.
@@ -834,7 +830,7 @@ test('an ordered lab reaches the chart, the hand-off and the record', () => {
   assert.deepEqual(plan.detail.labOrders, [order])
 })
 
-test('two orders in one review each get their own line, and one explanation', () => {
+test('two orders in one review each get their own chart line', () => {
   // Labs now to confirm the change, and a redraw on the interval. One decision.
   const plan = planCompletion(
     draft({
@@ -846,7 +842,22 @@ test('two orders in one review each get their own line, and one explanation', ()
 
   assert.match(plan.events, /Labs ordered: Now — CBC \(85025\)/)
   assert.match(plan.events, /Labs ordered: Jan 4, 2099 — CBC \(85025\)/)
-  assert.equal(plan.events.match(/nothing to do here unless they ask/g)?.length, 1)
+  assert.doesNotMatch(plan.events, /For customer service:/)
+})
+
+test('labs and a consult on Continue protocol do not create a customer service hand-off', () => {
+  const audiences = reviewAudiences(
+    draft({
+      disposition: 'continue_protocol',
+      labOrders: [labs()],
+      consultation: consult(),
+    }),
+    'Dr Smith'
+  )
+
+  assert.equal(audiences.customerService, '')
+  assert.match(audiences.chart, /Labs ordered: Now — CBC \(85025\)/)
+  assert.match(audiences.chart, /Consultation requested:/)
 })
 
 test('the resolution leads with when labs are coming, not which tests', () => {

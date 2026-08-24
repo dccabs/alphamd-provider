@@ -312,6 +312,10 @@ function doseChangesFor(draft: ReviewDraft) {
  *
  * Comes back empty when nobody downstream has to act, so callers can drop the
  * header rather than emit one with nothing under it.
+ *
+ * Labs and a consultation are not in this block. Those go on the chart
+ * (`chartActionLines`) and out to the Patient; customer service has nothing to
+ * do with either once they are sent.
  */
 function customerServiceBlock(draft: ReviewDraft, protocol: ProtocolOutcome | null): string {
   const changes = doseChangesFor(draft)
@@ -325,17 +329,6 @@ function customerServiceBlock(draft: ReviewDraft, protocol: ProtocolOutcome | nu
     ...changes.map((change) => change.cs),
     ...added.map((medication) => medication.cs),
     ...protocolInstructions(protocol),
-    // Nothing for customer service to do, but they are who the patient asks when
-    // an order email arrives, so they are told it is coming.
-    ...draft.labOrders.map((order) => `Labs ordered — ${orderLine(order)}`),
-    draft.labOrders.length
-      ? 'The patient is emailed each lab order and pays at checkout; nothing to do here unless they ask about it.'
-      : null,
-    // Also nothing to do, and also something the patient will ring about: they
-    // receive a booking link out of the blue and ask why.
-    draft.consultation
-      ? `Consultation — the patient is emailed a booking link for ${consultLine(draft.consultation)}. They book it themselves.`
-      : null,
     draft.csInstructions.trim() || null,
   ]
     .filter(Boolean)
