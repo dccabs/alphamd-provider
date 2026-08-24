@@ -23,6 +23,10 @@ import {
   sendLabReviewPatientMessage,
   type PatientMessageSendResult,
 } from '@/lib/labReviews/patientMessageSend'
+import {
+  sendLabReviewProtocol,
+  type ProtocolSendFromReview,
+} from '@/lib/labReviews/protocolSend'
 import { isReplyIdentity, type ReplyIdentity } from '@/lib/labReviews/replyIdentity'
 import { replyToTicket } from '@/lib/zendesk'
 import type { WriteState } from './state'
@@ -147,6 +151,31 @@ export async function sendPatientLabReviewMessageAction(
  * action: a server action is a public endpoint, so a medication id arriving from it
  * is an assertion, not a fact.
  */
+/**
+ * Send the recommended protocol without finishing the review.
+ *
+ * The second slice of finishing, after the patient message. The draft travels
+ * with the request for the same reason: Finalize can be pressed between a
+ * keystroke and the autosave debounce. Re-priced here rather than trusting the
+ * figure the confirmation screen already showed.
+ */
+export async function sendRecommendedProtocolAction(
+  reviewId: string,
+  draftJson: string
+): Promise<ProtocolSendFromReview> {
+  const access = await checkProviderAccess()
+  if (!access.ok) return { status: 'error', message: DENIED }
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(draftJson)
+  } catch {
+    return { status: 'error', message: 'Could not read the review.' }
+  }
+
+  return sendLabReviewProtocol(access.access, reviewId, parseDraft(parsed).newMedications)
+}
+
 export async function previewProtocolAction(draftJson: string): Promise<ProtocolOutcome | null> {
   const access = await checkProviderAccess()
   if (!access.ok) return null

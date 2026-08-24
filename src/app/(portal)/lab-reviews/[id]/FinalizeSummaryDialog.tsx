@@ -23,7 +23,11 @@ import {
 import { shortDate } from '@/lib/labReviews/format'
 import { DISPOSITION_LABELS, type ReviewDraft } from '@/lib/labReviews/reviewDraft'
 import { REPLY_IDENTITY_LABELS, type ReplyIdentity } from '@/lib/labReviews/replyIdentity'
-import { previewProtocolAction, sendPatientLabReviewMessageAction } from '../actions'
+import {
+  previewProtocolAction,
+  sendPatientLabReviewMessageAction,
+  sendRecommendedProtocolAction,
+} from '../actions'
 
 /**
  * The last screen before a review is finished: everything it will do, in one
@@ -44,8 +48,9 @@ import { previewProtocolAction, sendPatientLabReviewMessageAction } from '../act
  * throw without a disposition, which is deliberate — a summary of an incoherent
  * review would be a summary of something that cannot happen.
  *
- * Approve currently sends only the patient message (a new Zendesk ticket). The
- * review is left unfinished; the other cards stay preview.
+ * Approve currently sends the patient message (a new Zendesk ticket) and the
+ * recommended protocol. The review is left unfinished; the other cards stay
+ * preview.
  */
 
 type PatientSend =
@@ -54,6 +59,27 @@ type PatientSend =
   | { status: 'skipped' }
   | { status: 'sent'; ticketId: number; sentAs: ReplyIdentity; warning?: string }
   | { status: 'error'; message: string }
+
+type ProtocolSend =
+  | { status: 'idle' }
+  | { status: 'creating' }
+  | { status: 'skipped' }
+  | { status: 'handed-off' }
+  | { status: 'sent'; snapshotId: string; warning?: string }
+  | { status: 'error'; message: string }
+
+function isTerminalPatient(send: PatientSend) {
+  return send.status === 'sent' || send.status === 'skipped' || send.status === 'error'
+}
+
+function isTerminalProtocol(send: ProtocolSend) {
+  return (
+    send.status === 'sent' ||
+    send.status === 'skipped' ||
+    send.status === 'handed-off' ||
+    send.status === 'error'
+  )
+}
 
 export function FinalizeSummaryDialog({
   reviewId,
@@ -74,13 +100,12 @@ export function FinalizeSummaryDialog({
   onEdit: () => void
 }) {
   const [patientSend, setPatientSend] = useState<PatientSend>({ status: 'idle' })
+  const [protocolSend, setProtocolSend] = useState<ProtocolSend>({ status: 'idle' })
   const quote = useProtocolPreview(draft)
-  const sending = patientSend.status === 'creating'
-  const canClose =
-    patientSend.status === 'sent' ||
-    patientSend.status === 'skipped' ||
-    patientSend.status === 'error'
-  const canGoBack = patientSend.status === 'idle'
+  const sending = patientSend.status === 'creating' || protocolSend.status === 'creating'
+  const canClose = isTerminalPatient(patientSend) && isTerminalProtocol(protocolSend)
+  const canGoBack = patientSend.status === 'idle' && protocolSend.status === 'idle'
+  const canRetry = patientSend.status === 'error' || protocolSend.status === 'error'
 
   // Nothing is rendered until the pricing is known, rather than rendering the
   // cards and filling the price in when it arrives. Two of the cards *contain* the
@@ -146,30 +171,71 @@ export function FinalizeSummaryDialog({
   ].filter(Boolean)
 
   const approve = async () => {
-    if (patientSend.status !== 'idle' && patientSend.status !== 'error') return
+    if (sending) return
+    if (isTerminalPatient(patientSend) && isTerminalProtocol(protocolSend)) return
 
-    // Empty is decided here so the section never flashes "Creating".
-    if (!draft.patientMessage.trim()) {
-      setPatientSend({ status: 'skipped' })
-      return
+    const sendPatient = patientSend.status === 'idle' || patientSend.status === 'error'
+    const sendProtocolNow = protocolSend.status === 'idle' || protocolSend.status === 'error'
+
+    const tasks: Promise<void>[] = []
+
+    if (sendPatient) {
+      // Empty is decided here so the section never flashes "Creating".
+      if (!draft.patientMessage.trim()) {
+        setPatientSend({ status: 'skipped' })
+      } else {
+        setPatientSend({ status: 'creating' })
+        tasks.push(
+          sendPatientLabReviewMessageAction(reviewId, draft.patientMessage).then((result) => {
+            if (result.status === 'skipped') {
+              setPatientSend({ status: 'skipped' })
+              return
+            }
+            if (result.status === 'error') {
+              setPatientSend({ status: 'error', message: result.message })
+              return
+            }
+            setPatientSend({
+              status: 'sent',
+              ticketId: result.ticketId,
+              sentAs: result.sentAs,
+              warning: result.warning,
+            })
+          })
+        )
+      }
     }
 
-    setPatientSend({ status: 'creating' })
-    const result = await sendPatientLabReviewMessageAction(reviewId, draft.patientMessage)
-    if (result.status === 'skipped') {
-      setPatientSend({ status: 'skipped' })
-      return
+    if (sendProtocolNow) {
+      if (!protocol) {
+        setProtocolSend({ status: 'skipped' })
+      } else {
+        setProtocolSend({ status: 'creating' })
+        tasks.push(
+          sendRecommendedProtocolAction(reviewId, JSON.stringify(draft)).then((result) => {
+            if (result.status === 'skipped') {
+              setProtocolSend({ status: 'skipped' })
+              return
+            }
+            if (result.status === 'handed-off') {
+              setProtocolSend({ status: 'handed-off' })
+              return
+            }
+            if (result.status === 'error') {
+              setProtocolSend({ status: 'error', message: result.message })
+              return
+            }
+            setProtocolSend({
+              status: 'sent',
+              snapshotId: result.snapshotId,
+              warning: result.warning,
+            })
+          })
+        )
+      }
     }
-    if (result.status === 'error') {
-      setPatientSend({ status: 'error', message: result.message })
-      return
-    }
-    setPatientSend({
-      status: 'sent',
-      ticketId: result.ticketId,
-      sentAs: result.sentAs,
-      warning: result.warning,
-    })
+
+    await Promise.all(tasks)
   }
 
   return (
@@ -185,9 +251,9 @@ export function FinalizeSummaryDialog({
           <DialogTitle>Before you finish — {patientName}</DialogTitle>
           <DialogDescription>
             {sending
-              ? 'Sending the patient message. The review is not finished.'
+              ? 'Sending the patient message and the recommended protocol. The review is not finished.'
               : canClose
-                ? 'The patient message has been handled. The review is still open — nothing else has been submitted.'
+                ? 'The patient message and recommended protocol have been handled. The review is still open — nothing else has been submitted.'
                 : 'Nothing has been submitted. This is what finishing the review would send and record.'}
           </DialogDescription>
         </DialogHeader>
@@ -261,7 +327,12 @@ export function FinalizeSummaryDialog({
             </Section>
           )}
 
-          {protocol && <ProtocolSection protocol={protocol} />}
+          {protocol && (
+            <ProtocolSection
+              protocol={protocol}
+              status={<ProtocolSendStatus send={protocolSend} />}
+            />
+          )}
 
           {/* Named by reader rather than by field, because the chart card below
               contains the other two: the note records what the patient was told
@@ -304,7 +375,7 @@ export function FinalizeSummaryDialog({
           </Button>
           {canClose ? (
             <>
-              {patientSend.status === 'error' && (
+              {canRetry && (
                 <Button onClick={() => void approve()}>Retry</Button>
               )}
               <Button onClick={onEdit}>Close</Button>
@@ -364,7 +435,13 @@ function useProtocolPreview(draft: ReviewDraft): PreviewState {
  * surcharge the provider did not expect is exactly the kind of thing that should
  * be caught before it reaches a patient's card.
  */
-function ProtocolSection({ protocol }: { protocol: ProtocolOutcome }) {
+function ProtocolSection({
+  protocol,
+  status,
+}: {
+  protocol: ProtocolOutcome
+  status?: ReactNode
+}) {
   if (protocol.kind === 'handed-off') {
     return (
       <Section title="RECOMMENDED PROTOCOL">
@@ -377,6 +454,7 @@ function ProtocolSection({ protocol }: { protocol: ProtocolOutcome }) {
             ))}
           </ul>
         </div>
+        {status}
       </Section>
     )
   }
@@ -392,6 +470,7 @@ function ProtocolSection({ protocol }: { protocol: ProtocolOutcome }) {
         </pre>
         <p className="mt-2 text-xs text-muted-foreground">{protocol.caveat}</p>
       </div>
+      {status}
     </Section>
   )
 }
@@ -431,6 +510,58 @@ function Destination({
       )}
       {status}
     </Section>
+  )
+}
+
+function ProtocolSendStatus({ send }: { send: ProtocolSend }) {
+  if (send.status === 'idle') return null
+
+  if (send.status === 'creating') {
+    return (
+      <p
+        aria-live="polite"
+        className="flex items-center gap-1.5 text-xs text-muted-foreground"
+      >
+        <Loader2 className="size-3.5 animate-spin" aria-hidden />
+        Saving the quote and emailing it…
+      </p>
+    )
+  }
+
+  if (send.status === 'skipped') {
+    return (
+      <p aria-live="polite" className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Check className="size-3.5" aria-hidden />
+        Nothing to send — no protocol on this review
+      </p>
+    )
+  }
+
+  if (send.status === 'handed-off') {
+    return (
+      <p aria-live="polite" className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Check className="size-3.5" aria-hidden />
+        No quote emailed — customer service will price this by hand
+      </p>
+    )
+  }
+
+  if (send.status === 'error') {
+    return (
+      <p role="alert" className="text-xs text-destructive">
+        {send.message}
+      </p>
+    )
+  }
+
+  return (
+    <div aria-live="polite" className="flex flex-col gap-1">
+      <p className="flex items-center gap-1.5 text-xs">
+        <Check className="size-3.5" aria-hidden />
+        Sent — quote saved to the patient&apos;s record
+      </p>
+      {send.warning && <p className="text-xs text-muted-foreground">{send.warning}</p>}
+    </div>
   )
 }
 

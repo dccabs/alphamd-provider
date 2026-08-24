@@ -13,6 +13,7 @@ import { requireConsents, sendConsentEmail } from './consents'
 import { loadPricingCatalog } from './loadCatalog'
 import { formatUsd, type Cents } from './money'
 import { PROTOCOL_FROM, protocolEmail } from './protocolEmail'
+import { renderProtocolEmailHtml } from './protocolEmailHtml'
 import {
   DISCOUNT_NOTICE,
   blockLine,
@@ -151,9 +152,16 @@ export async function sendProtocol(
 
   const admin = createAdminClient()
 
+  // `pricing_version` is in the row object and in `data.source`, but the
+  // production column is added by `migrations/2026-08-17-protocol-send.sql`,
+  // which has not been applied. Writing it here would refuse the snapshot.
+  const { pricing_version: _pricingVersion, ...snapshotInsert } = snapshotRow(quote, {
+    createdBy: access.userId,
+  })
+
   const { data: snapshot, error: snapshotError } = await admin
     .from('pricing_snapshots')
-    .insert(snapshotRow(quote, { createdBy: access.userId }))
+    .insert(snapshotInsert)
     .select('id')
     .maybeSingle()
   if (snapshotError || !snapshot?.id) {
@@ -172,7 +180,8 @@ export async function sendProtocol(
       created_by: access.userId,
       last_updated_by: access.userId,
       snapshot_id: snapshotId,
-      lab_review_id: reviewId,
+      // `lab_review_id` waits on the same unapplied migration; the review is
+      // recorded on `data.source.labReview` until that column exists.
       data: protocolData(quote, { snapshotId, labReviewId: reviewId }),
       // `approved_by_pt` and `signed_payment_agreement` are left to their
       // defaults of false, which is what "sent, awaiting the patient" is. The
@@ -194,7 +203,7 @@ export async function sendProtocol(
     to: subject.email,
     subject: email.subject,
     text: email.text,
-    html: email.html,
+    html: await renderProtocolEmailHtml(email, subject.firstName),
   })
 
   const warnings: string[] = []

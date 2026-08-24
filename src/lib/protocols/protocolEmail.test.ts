@@ -161,24 +161,41 @@ test('both parts point at the page that takes the payment', () => {
   const email = protocolEmail({ firstName: 'Dan', quote: quoteOf([TESTOSTERONE]) })
 
   assert.match(email.text, /\/profile\/recommended-protocol/)
-  assert.match(email.html, /href="[^"]*\/profile\/recommended-protocol"/)
 })
 
-test('a plain text part is always sent alongside the HTML', () => {
-  // A client that renders the text part must not show an empty message with no
-  // way to accept — the same rule as the consultation invite.
+test('a plain text part is always produced, so a client that ignores HTML still has a way to accept', () => {
   const email = protocolEmail({ firstName: 'Dan', quote: quoteOf([TESTOSTERONE]) })
 
   assert.ok(email.text.trim().length > 200)
-  assert.ok(email.html.includes('<!DOCTYPE html>'))
 })
 
-test('a name with markup in it cannot break the HTML', () => {
-  const email = protocolEmail({
-    firstName: '<script>alert(1)</script>',
-    quote: quoteOf([TESTOSTERONE]),
-  })
+test('the POS template is given the same dollar figures the snapshot stores', () => {
+  const { pricingData } = protocolEmail({ firstName: 'Dan', quote: quoteOf([TESTOSTERONE]) })
 
-  assert.equal(email.html.includes('<script>'), false)
-  assert.match(email.html, /&lt;script&gt;/)
+  assert.equal(pricingData.subscription?.productName, 'Testosterone Cypionate')
+  assert.equal(pricingData.subscription?.dosage, '160mg')
+  assert.equal(pricingData.subscription?.durationLabel, 'Monthly')
+  assert.equal(pricingData.subscription?.monthlyPrice, 129)
+  assert.equal(pricingData.subscription?.taxRate, 0.065)
+  assert.equal(pricingData.subscription?.taxAmount, 8.39)
+  assert.equal(pricingData.subscription?.totalDueToday, 137.39)
+  assert.equal(pricingData.grandTotal, 137.39)
+  assert.deepEqual(pricingData.ancillary.lineItems, [])
+})
+
+test('a charged ancillary is in the structured payload the template totals', () => {
+  const { pricingData } = protocolEmail({ firstName: 'Dan', quote: quoteOf([TESTOSTERONE, HCG]) })
+
+  assert.equal(pricingData.ancillary.lineItems[0]?.name, 'HCG 10,000 units')
+  assert.equal(pricingData.ancillary.lineItems[0]?.subtotal, 300)
+  assert.equal(pricingData.ancillary.total, 300)
+  assert.equal(pricingData.grandTotal, 437.39)
+})
+
+test('a protocol with no recurring plan hands the template a null subscription', () => {
+  const { pricingData } = protocolEmail({ firstName: 'Dan', quote: quoteOf([HCG]) })
+
+  assert.equal(pricingData.subscription, null)
+  assert.equal(pricingData.ancillary.total, 300)
+  assert.equal(pricingData.grandTotal, 300)
 })
