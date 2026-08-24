@@ -27,6 +27,10 @@ import {
   sendLabReviewProtocol,
   type ProtocolSendFromReview,
 } from '@/lib/labReviews/protocolSend'
+import {
+  applyLabReviewFollowUp,
+  type FollowUpSendResult,
+} from '@/lib/labReviews/followUpSend'
 import { isReplyIdentity, type ReplyIdentity } from '@/lib/labReviews/replyIdentity'
 import { replyToTicket } from '@/lib/zendesk'
 import type { WriteState } from './state'
@@ -174,6 +178,27 @@ export async function sendRecommendedProtocolAction(
   }
 
   return sendLabReviewProtocol(access.access, reviewId, parseDraft(parsed).newMedications)
+}
+
+/**
+ * Create the customer service action and replace the review-outcome flags,
+ * without finishing the review.
+ */
+export async function applyLabReviewFollowUpAction(
+  reviewId: string,
+  draftJson: string
+): Promise<FollowUpSendResult> {
+  const access = await checkProviderAccess()
+  if (!access.ok) return { status: 'error', message: DENIED }
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(draftJson)
+  } catch {
+    return { status: 'error', message: 'Could not read the review.' }
+  }
+
+  return applyLabReviewFollowUp(access.access, reviewId, parseDraft(parsed))
 }
 
 export async function previewProtocolAction(draftJson: string): Promise<ProtocolOutcome | null> {

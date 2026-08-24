@@ -24,6 +24,7 @@ import { shortDate } from '@/lib/labReviews/format'
 import { DISPOSITION_LABELS, type ReviewDraft } from '@/lib/labReviews/reviewDraft'
 import { REPLY_IDENTITY_LABELS, type ReplyIdentity } from '@/lib/labReviews/replyIdentity'
 import {
+  applyLabReviewFollowUpAction,
   previewProtocolAction,
   sendPatientLabReviewMessageAction,
   sendRecommendedProtocolAction,
@@ -48,9 +49,9 @@ import {
  * throw without a disposition, which is deliberate — a summary of an incoherent
  * review would be a summary of something that cannot happen.
  *
- * Approve currently sends the patient message (a new Zendesk ticket) and the
- * recommended protocol. The review is left unfinished; the other cards stay
- * preview.
+ * Approve currently sends the patient message, the recommended protocol, the
+ * customer service action, and the review-outcome flags. The review is left
+ * unfinished; the remaining cards stay preview.
  */
 
 type PatientSend =
@@ -68,6 +69,18 @@ type ProtocolSend =
   | { status: 'sent'; snapshotId: string; warning?: string }
   | { status: 'error'; message: string }
 
+type FollowUpSend =
+  | { status: 'idle' }
+  | { status: 'creating' }
+  | {
+      status: 'applied'
+      actionId: string | null
+      addedFlagIds: number[]
+      removedFlagIds: number[]
+      warning?: string
+    }
+  | { status: 'error'; message: string }
+
 function isTerminalPatient(send: PatientSend) {
   return send.status === 'sent' || send.status === 'skipped' || send.status === 'error'
 }
@@ -79,6 +92,10 @@ function isTerminalProtocol(send: ProtocolSend) {
     send.status === 'handed-off' ||
     send.status === 'error'
   )
+}
+
+function isTerminalFollowUp(send: FollowUpSend) {
+  return send.status === 'applied' || send.status === 'error'
 }
 
 export function FinalizeSummaryDialog({
@@ -101,11 +118,24 @@ export function FinalizeSummaryDialog({
 }) {
   const [patientSend, setPatientSend] = useState<PatientSend>({ status: 'idle' })
   const [protocolSend, setProtocolSend] = useState<ProtocolSend>({ status: 'idle' })
+  const [followUpSend, setFollowUpSend] = useState<FollowUpSend>({ status: 'idle' })
   const quote = useProtocolPreview(draft)
-  const sending = patientSend.status === 'creating' || protocolSend.status === 'creating'
-  const canClose = isTerminalPatient(patientSend) && isTerminalProtocol(protocolSend)
-  const canGoBack = patientSend.status === 'idle' && protocolSend.status === 'idle'
-  const canRetry = patientSend.status === 'error' || protocolSend.status === 'error'
+  const sending =
+    patientSend.status === 'creating' ||
+    protocolSend.status === 'creating' ||
+    followUpSend.status === 'creating'
+  const canClose =
+    isTerminalPatient(patientSend) &&
+    isTerminalProtocol(protocolSend) &&
+    isTerminalFollowUp(followUpSend)
+  const canGoBack =
+    patientSend.status === 'idle' &&
+    protocolSend.status === 'idle' &&
+    followUpSend.status === 'idle'
+  const canRetry =
+    patientSend.status === 'error' ||
+    protocolSend.status === 'error' ||
+    followUpSend.status === 'error'
 
   // Nothing is rendered until the pricing is known, rather than rendering the
   // cards and filling the price in when it arrives. Two of the cards *contain* the
@@ -172,10 +202,17 @@ export function FinalizeSummaryDialog({
 
   const approve = async () => {
     if (sending) return
-    if (isTerminalPatient(patientSend) && isTerminalProtocol(protocolSend)) return
+    if (
+      isTerminalPatient(patientSend) &&
+      isTerminalProtocol(protocolSend) &&
+      isTerminalFollowUp(followUpSend)
+    ) {
+      return
+    }
 
     const sendPatient = patientSend.status === 'idle' || patientSend.status === 'error'
     const sendProtocolNow = protocolSend.status === 'idle' || protocolSend.status === 'error'
+    const sendFollowUp = followUpSend.status === 'idle' || followUpSend.status === 'error'
 
     const tasks: Promise<void>[] = []
 
@@ -235,6 +272,25 @@ export function FinalizeSummaryDialog({
       }
     }
 
+    if (sendFollowUp) {
+      setFollowUpSend({ status: 'creating' })
+      tasks.push(
+        applyLabReviewFollowUpAction(reviewId, JSON.stringify(draft)).then((result) => {
+          if (result.status === 'error') {
+            setFollowUpSend({ status: 'error', message: result.message })
+            return
+          }
+          setFollowUpSend({
+            status: 'applied',
+            actionId: result.actionId,
+            addedFlagIds: result.addedFlagIds,
+            removedFlagIds: result.removedFlagIds,
+            warning: result.warning,
+          })
+        })
+      )
+    }
+
     await Promise.all(tasks)
   }
 
@@ -251,9 +307,9 @@ export function FinalizeSummaryDialog({
           <DialogTitle>Before you finish — {patientName}</DialogTitle>
           <DialogDescription>
             {sending
-              ? 'Sending the patient message and the recommended protocol. The review is not finished.'
+              ? 'Sending the patient message, the recommended protocol, and the customer service follow-up. The review is not finished.'
               : canClose
-                ? 'The patient message and recommended protocol have been handled. The review is still open — nothing else has been submitted.'
+                ? 'The patient message, recommended protocol, and customer service follow-up have been handled. The review is still open — nothing else has been submitted.'
                 : 'Nothing has been submitted. This is what finishing the review would send and record.'}
           </DialogDescription>
         </DialogHeader>
@@ -348,6 +404,7 @@ export function FinalizeSummaryDialog({
             title="CUSTOMER SERVICE RECEIVES"
             text={audiences.customerService}
             empty="Nothing for customer service."
+            status={<FollowUpActionStatus send={followUpSend} />}
           />
 
           {/* Never empty: the note always opens with who reviewed and what they
@@ -365,6 +422,7 @@ export function FinalizeSummaryDialog({
                   <li key={effect}>{effect}</li>
                 ))}
               </ul>
+              <FollowUpFlagStatus send={followUpSend} />
             </Section>
           )}
         </div>
@@ -510,6 +568,71 @@ function Destination({
       )}
       {status}
     </Section>
+  )
+}
+
+function FollowUpActionStatus({ send }: { send: FollowUpSend }) {
+  if (send.status === 'idle') return null
+
+  if (send.status === 'creating') {
+    return (
+      <p
+        aria-live="polite"
+        className="flex items-center gap-1.5 text-xs text-muted-foreground"
+      >
+        <Loader2 className="size-3.5 animate-spin" aria-hidden />
+        Creating the customer service action…
+      </p>
+    )
+  }
+
+  if (send.status === 'error') {
+    return (
+      <p role="alert" className="text-xs text-destructive">
+        {send.message}
+      </p>
+    )
+  }
+
+  return (
+    <div aria-live="polite" className="flex flex-col gap-1">
+      <p className="flex items-center gap-1.5 text-xs">
+        <Check className="size-3.5" aria-hidden />
+        {send.actionId
+          ? `Action created — assigned to customer service`
+          : 'Nothing to assign — no customer service action created'}
+      </p>
+      {send.warning && <p className="text-xs text-muted-foreground">{send.warning}</p>}
+    </div>
+  )
+}
+
+function FollowUpFlagStatus({ send }: { send: FollowUpSend }) {
+  if (send.status === 'idle' || send.status === 'creating') return null
+
+  if (send.status === 'error') {
+    return (
+      <p role="alert" className="text-xs text-destructive">
+        {send.message}
+      </p>
+    )
+  }
+
+  const removed = send.removedFlagIds
+    .map((id) => FLAG_LABELS[id] ?? id)
+    .join(', ')
+  const added = send.addedFlagIds.map((id) => FLAG_LABELS[id] ?? id).join(', ')
+
+  return (
+    <div aria-live="polite" className="flex flex-col gap-1 text-xs">
+      <p className="flex items-center gap-1.5">
+        <Check className="size-3.5" aria-hidden />
+        Flags updated
+        {removed ? ` — cleared ${removed}` : ''}
+        {added ? `; added ${added}` : ''}
+      </p>
+      {send.warning && <p className="text-muted-foreground">{send.warning}</p>}
+    </div>
   )
 }
 
