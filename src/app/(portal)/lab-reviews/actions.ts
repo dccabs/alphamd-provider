@@ -6,6 +6,7 @@ import { checkProviderAccess } from '@/lib/authz'
 import { mintConsultLink, type MintedLink } from '@/lib/consultations/mutations'
 import { cancelScheduledLabOrder } from '@/lib/labOrders/mutations'
 import {
+  closeLabReview,
   completeLabReview,
   escalateLabReview,
   reassignLabReview,
@@ -31,6 +32,10 @@ import {
   applyLabReviewFollowUp,
   type FollowUpSendResult,
 } from '@/lib/labReviews/followUpSend'
+import {
+  writeLabReviewChartNote,
+  type ChartNoteSendResult,
+} from '@/lib/labReviews/chartNoteSend'
 import { isReplyIdentity, type ReplyIdentity } from '@/lib/labReviews/replyIdentity'
 import { replyToTicket } from '@/lib/zendesk'
 import type { WriteState } from './state'
@@ -201,6 +206,27 @@ export async function applyLabReviewFollowUpAction(
   return applyLabReviewFollowUp(access.access, reviewId, parseDraft(parsed))
 }
 
+/**
+ * Write the completion chart note without finishing the review.
+ */
+export async function writeLabReviewChartNoteAction(
+  reviewId: string,
+  draftJson: string,
+  snapshotId?: string | null
+): Promise<ChartNoteSendResult> {
+  const access = await checkProviderAccess()
+  if (!access.ok) return { status: 'error', message: DENIED }
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(draftJson)
+  } catch {
+    return { status: 'error', message: 'Could not read the review.' }
+  }
+
+  return writeLabReviewChartNote(access.access, reviewId, parseDraft(parsed), snapshotId)
+}
+
 export async function previewProtocolAction(draftJson: string): Promise<ProtocolOutcome | null> {
   const access = await checkProviderAccess()
   if (!access.ok) return null
@@ -303,6 +329,31 @@ export async function completeLabReviewAction(
   }
 
   const result = await completeLabReview(access.access, reviewId, parseDraft(parsed))
+  if (!result.ok) return { status: 'error', message: result.error }
+
+  revalidateReview(reviewId)
+  return { status: 'ok', warning: result.warning }
+}
+
+/**
+ * Close the review after Approve has already sent the messages, protocol,
+ * customer service action, and chart note.
+ */
+export async function closeLabReviewAction(
+  reviewId: string,
+  draftJson: string
+): Promise<WriteState> {
+  const access = await checkProviderAccess()
+  if (!access.ok) return { status: 'error', message: DENIED }
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(draftJson)
+  } catch {
+    return { status: 'error', message: 'Could not read the review.' }
+  }
+
+  const result = await closeLabReview(access.access, reviewId, parseDraft(parsed))
   if (!result.ok) return { status: 'error', message: result.error }
 
   revalidateReview(reviewId)

@@ -103,8 +103,12 @@ export type ProtocolOutcome =
 export type CompletionPlan = {
   /** One line for `lab_reviews.resolution`, which the queue already displays. */
   resolution: string
-  /** The chart note body. Plain text. */
+  /** The chart note body. The provider's note, then the AI summary (or a
+   *  one-line fallback if none has been generated yet). */
   note: string
+  /** Structured facts this review produced — the source the AI summary is
+   *  written from. Not written to the chart. */
+  events: string
   detail: DispositionDetail
   addFlagIds: number[]
   /** Deleted, not deactivated — matching the main app. The flag carries no
@@ -374,9 +378,8 @@ function protocolInstructions(protocol: ProtocolOutcome | null): string[] {
  * beside the record would eventually disagree with it, and what disagreed would
  * be a prescription. `chart` is literally the note `planCompletion` writes.
  *
- * The chart text contains the other two — the note states what the patient was
- * told and what customer service was handed — which is why they are named by
- * their reader rather than presented as three separate documents.
+ * The chart is the provider's own note plus a short summary of what else
+ * happened. The patient and customer service texts stay their own documents.
  */
 export type ReviewAudiences = {
   /** Verbatim what the patient is sent. Empty when nothing was written. */
@@ -385,6 +388,8 @@ export type ReviewAudiences = {
   customerService: string
   /** The chart note, exactly as it will be written. */
   chart: string
+  /** Structured facts the chart summary is written from. */
+  events: string
 }
 
 export function reviewAudiences(
@@ -392,10 +397,12 @@ export function reviewAudiences(
   providerName: string,
   protocol: ProtocolOutcome | null = null
 ): ReviewAudiences {
+  const plan = planCompletion(draft, providerName, protocol)
   return {
     patient: patientText(draft),
     customerService: customerServiceBlock(draft, protocol),
-    chart: planCompletion(draft, providerName, protocol).note,
+    chart: plan.note,
+    events: plan.events,
   }
 }
 
@@ -421,6 +428,56 @@ function patientText(draft: ReviewDraft): string {
 
   const booking = patientBookingBlock(draft.consultation, null)
   return written ? `${written}\n\n${booking}` : booking
+}
+
+/**
+ * What this review did, as structured facts. The AI summary is written from
+ * this; the chart itself only stores the provider's note plus that summary.
+ */
+export function completionEvents(
+  draft: ReviewDraft,
+  providerName: string,
+  protocol: ProtocolOutcome | null,
+  label: string
+): string {
+  const lines: string[] = [`Lab review completed by ${providerName}. Disposition: ${label}.`]
+  const changes = doseChangesFor(draft)
+    .map(doseChangeLines)
+    .filter((change) => change !== null)
+  const added = namedMedications(draft)
+    .map(newMedicationLines)
+    .filter((medication) => medication !== null)
+
+  for (const change of changes) lines.push(change.chart)
+
+  for (const order of draft.labOrders) lines.push(`Labs ordered: ${orderLine(order)}`)
+
+  if (draft.consultation) {
+    lines.push(`Consultation requested: ${consultLine(draft.consultation)}`)
+  }
+
+  if (draft.patientMessage.trim()) {
+    lines.push('Patient was emailed findings of lab results with a short summary.')
+  }
+
+  for (const medication of added) lines.push(medication.chart)
+
+  if (protocol?.kind === 'quote') {
+    lines.push(`Recommended protocol sent — ${protocol.total} due today. ${protocol.caveat}`)
+  }
+  if (protocol?.kind === 'handed-off') {
+    lines.push(
+      [
+        'A recommended protocol was not sent: it could not be priced automatically.',
+        ...protocol.reasons.map((reason) => `  ${reason}`),
+      ].join('\n')
+    )
+  }
+
+  const customerService = customerServiceBlock(draft, protocol)
+  if (customerService) lines.push(`For customer service: ${customerService}`)
+
+  return lines.join('\n')
 }
 
 export function planCompletion(
@@ -468,60 +525,16 @@ export function planCompletion(
       break
   }
 
-  const lines: string[] = [`Lab review completed by ${providerName}. Disposition: ${label}.`]
-  // One line per medication rather than one line listing them, because each
-  // carries a dose and a sig that somebody has to read and act on separately.
-  const changes = doseChangesFor(draft)
-    .map(doseChangeLines)
-    .filter((change) => change !== null)
-  const added = meds.map(newMedicationLines).filter((added) => added !== null)
-
-  for (const change of changes) lines.push(change.chart)
-
-  // A line each, ahead of the detail `scheduleLabOrder` writes as its own note.
-  // This one states that the review ordered them; that one is the order itself,
-  // with every test and diagnosis code on it.
-  for (const order of draft.labOrders) lines.push(`Labs ordered: ${orderLine(order)}`)
-
-  // Ahead of the note `requestConsultation` writes, for the same reason: this line
-  // says the review asked for the appointment, that one says the invitation went
-  // out and to which address.
-  if (draft.consultation) {
-    lines.push(`Consultation requested: ${consultLine(draft.consultation)}`)
-  }
-
-  // What the patient was told belongs on the chart: the record has to show that
-  // the result was communicated, not only that it was read. Including the booking
-  // paragraph, so the note shows they were told how to book and not merely that a
-  // consultation was wanted.
-  const forPatient = patientText(draft)
-  if (forPatient) lines.push(`Message for the patient: ${forPatient}`)
-
-  for (const medication of added) lines.push(medication.chart)
-
-  // One line, not the breakdown. `sendProtocol` writes a second note carrying the
-  // full pricing and a link to the stored quote, and repeating it here would put
-  // two versions of a price on one chart.
-  if (protocol?.kind === 'quote') {
-    lines.push(`Recommended protocol sent — ${protocol.total} due today. ${protocol.caveat}`)
-  }
-  if (protocol?.kind === 'handed-off') {
-    lines.push(
-      [
-        'A recommended protocol was not sent: it could not be priced automatically.',
-        ...protocol.reasons.map((reason) => `  ${reason}`),
-      ].join('\n')
-    )
-  }
-
-  const customerService = customerServiceBlock(draft, protocol)
-  if (customerService) lines.push(`For customer service: ${customerService}`)
-
-  if (draft.providerNote.trim()) lines.push(draft.providerNote.trim())
+  const events = completionEvents(draft, providerName, protocol, label)
+  const fallback = `Lab review completed by ${providerName}. Disposition: ${label}.`
+  const note = [draft.providerNote.trim(), draft.chartSummary.trim() || fallback]
+    .filter(Boolean)
+    .join('\n\n')
 
   return {
     resolution: resolutionLine(draft, label),
-    note: lines.join('\n'),
+    note,
+    events,
     detail: {
       disposition,
       doseChanges: doseChangesFor(draft).map((change) => ({

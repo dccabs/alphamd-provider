@@ -1,9 +1,10 @@
 'use client'
 
-import { useEffect, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Check, Loader2 } from 'lucide-react'
+import Link from 'next/link'
 
-import { Button } from '@/components/ui/button'
+import { Button, buttonVariants } from '@/components/ui/button'
 import {
   Dialog,
   DialogContent,
@@ -25,9 +26,11 @@ import { DISPOSITION_LABELS, type ReviewDraft } from '@/lib/labReviews/reviewDra
 import { REPLY_IDENTITY_LABELS, type ReplyIdentity } from '@/lib/labReviews/replyIdentity'
 import {
   applyLabReviewFollowUpAction,
+  closeLabReviewAction,
   previewProtocolAction,
   sendPatientLabReviewMessageAction,
   sendRecommendedProtocolAction,
+  writeLabReviewChartNoteAction,
 } from '../actions'
 
 /**
@@ -43,15 +46,16 @@ import {
  * impossible to see while writing them in separate boxes.
  *
  * Every string here comes from `planCompletion` and `reviewAudiences` rather than
- * being composed for display, so what is approved is what gets written.
+ * being composed for display, so what is approved is what gets written. The
+ * chart is the exception that proves it: the provider's note is verbatim, and
+ * the rest is an AI summary generated on open from the same events.
  *
  * **Precondition:** `validateCompletion(draft)` must be empty. Both functions
  * throw without a disposition, which is deliberate — a summary of an incoherent
  * review would be a summary of something that cannot happen.
  *
- * Approve currently sends the patient message, the recommended protocol, the
- * customer service action, and the review-outcome flags. The review is left
- * unfinished; the remaining cards stay preview.
+ * Approve swaps this preview for an animated list of the writes, then closes
+ * the review. The preview stays put until they confirm.
  */
 
 type PatientSend =
@@ -81,21 +85,24 @@ type FollowUpSend =
     }
   | { status: 'error'; message: string }
 
-function isTerminalPatient(send: PatientSend) {
-  return send.status === 'sent' || send.status === 'skipped' || send.status === 'error'
-}
+type ChartNoteSend =
+  | { status: 'idle' }
+  | { status: 'creating' }
+  | { status: 'written'; warning?: string }
+  | { status: 'error'; message: string }
 
-function isTerminalProtocol(send: ProtocolSend) {
-  return (
-    send.status === 'sent' ||
-    send.status === 'skipped' ||
-    send.status === 'handed-off' ||
-    send.status === 'error'
-  )
-}
+type CloseSend =
+  | { status: 'idle' }
+  | { status: 'creating' }
+  | { status: 'closed'; warning?: string }
+  | { status: 'error'; message: string }
 
-function isTerminalFollowUp(send: FollowUpSend) {
-  return send.status === 'applied' || send.status === 'error'
+type ApprovalPhase = 'preview' | 'working' | 'done'
+
+function pause(ms: number) {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, ms)
+  })
 }
 
 export function FinalizeSummaryDialog({
@@ -105,6 +112,8 @@ export function FinalizeSummaryDialog({
   patientEmail,
   providerName,
   onEdit,
+  onChartSummary,
+  onFinished,
 }: {
   reviewId: string
   draft: ReviewDraft
@@ -115,27 +124,43 @@ export function FinalizeSummaryDialog({
   /** The name the chart note will be signed with. */
   providerName: string
   onEdit: () => void
+  onChartSummary: (chartSummary: string) => void
+  onFinished: () => void
 }) {
+  const [phase, setPhase] = useState<ApprovalPhase>('preview')
   const [patientSend, setPatientSend] = useState<PatientSend>({ status: 'idle' })
   const [protocolSend, setProtocolSend] = useState<ProtocolSend>({ status: 'idle' })
   const [followUpSend, setFollowUpSend] = useState<FollowUpSend>({ status: 'idle' })
+  const [chartNoteSend, setChartNoteSend] = useState<ChartNoteSend>({ status: 'idle' })
+  const [closeSend, setCloseSend] = useState<CloseSend>({ status: 'idle' })
   const quote = useProtocolPreview(draft)
+  const protocolForSummary = quote.state === 'ready' ? quote.outcome : null
+  const events =
+    quote.state === 'ready'
+      ? planCompletion(draft, providerName, protocolForSummary).events
+      : ''
+  const summary = useChartSummary({
+    events,
+    existing: draft.chartSummary,
+    enabled: quote.state === 'ready',
+    onReady: onChartSummary,
+  })
+  const summarizing =
+    summary.status === 'generating' ||
+    (!draft.chartSummary.trim() && summary.status !== 'error')
   const sending =
     patientSend.status === 'creating' ||
     protocolSend.status === 'creating' ||
-    followUpSend.status === 'creating'
-  const canClose =
-    isTerminalPatient(patientSend) &&
-    isTerminalProtocol(protocolSend) &&
-    isTerminalFollowUp(followUpSend)
-  const canGoBack =
-    patientSend.status === 'idle' &&
-    protocolSend.status === 'idle' &&
-    followUpSend.status === 'idle'
+    followUpSend.status === 'creating' ||
+    chartNoteSend.status === 'creating' ||
+    closeSend.status === 'creating'
+  const canGoBack = phase === 'preview' && !sending
   const canRetry =
     patientSend.status === 'error' ||
     protocolSend.status === 'error' ||
-    followUpSend.status === 'error'
+    followUpSend.status === 'error' ||
+    chartNoteSend.status === 'error' ||
+    closeSend.status === 'error'
 
   // Nothing is rendered until the pricing is known, rather than rendering the
   // cards and filling the price in when it arrives. Two of the cards *contain* the
@@ -201,120 +226,154 @@ export function FinalizeSummaryDialog({
   ].filter(Boolean)
 
   const approve = async () => {
-    if (sending) return
-    if (
-      isTerminalPatient(patientSend) &&
-      isTerminalProtocol(protocolSend) &&
-      isTerminalFollowUp(followUpSend)
-    ) {
-      return
-    }
+    if (sending || summarizing) return
 
-    const sendPatient = patientSend.status === 'idle' || patientSend.status === 'error'
+    setPhase('working')
+
     const sendProtocolNow = protocolSend.status === 'idle' || protocolSend.status === 'error'
+    const sendPatient = patientSend.status === 'idle' || patientSend.status === 'error'
     const sendFollowUp = followUpSend.status === 'idle' || followUpSend.status === 'error'
-
-    const tasks: Promise<void>[] = []
-
-    if (sendPatient) {
-      // Empty is decided here so the section never flashes "Creating".
-      if (!draft.patientMessage.trim()) {
-        setPatientSend({ status: 'skipped' })
-      } else {
-        setPatientSend({ status: 'creating' })
-        tasks.push(
-          sendPatientLabReviewMessageAction(reviewId, draft.patientMessage).then((result) => {
-            if (result.status === 'skipped') {
-              setPatientSend({ status: 'skipped' })
-              return
-            }
-            if (result.status === 'error') {
-              setPatientSend({ status: 'error', message: result.message })
-              return
-            }
-            setPatientSend({
-              status: 'sent',
-              ticketId: result.ticketId,
-              sentAs: result.sentAs,
-              warning: result.warning,
-            })
-          })
-        )
-      }
-    }
+    const sendChartNote = chartNoteSend.status === 'idle' || chartNoteSend.status === 'error'
+    const sendClose = closeSend.status === 'idle' || closeSend.status === 'error'
 
     if (sendProtocolNow) {
       if (!protocol) {
         setProtocolSend({ status: 'skipped' })
       } else {
         setProtocolSend({ status: 'creating' })
-        tasks.push(
-          sendRecommendedProtocolAction(reviewId, JSON.stringify(draft)).then((result) => {
-            if (result.status === 'skipped') {
-              setProtocolSend({ status: 'skipped' })
-              return
-            }
-            if (result.status === 'handed-off') {
-              setProtocolSend({ status: 'handed-off' })
-              return
-            }
-            if (result.status === 'error') {
-              setProtocolSend({ status: 'error', message: result.message })
-              return
-            }
-            setProtocolSend({
-              status: 'sent',
-              snapshotId: result.snapshotId,
-              warning: result.warning,
-            })
+        const result = await sendRecommendedProtocolAction(reviewId, JSON.stringify(draft))
+        if (result.status === 'error') {
+          setProtocolSend({ status: 'error', message: result.message })
+          return
+        }
+        if (result.status === 'skipped') setProtocolSend({ status: 'skipped' })
+        else if (result.status === 'handed-off') setProtocolSend({ status: 'handed-off' })
+        else {
+          setProtocolSend({
+            status: 'sent',
+            snapshotId: result.snapshotId,
+            warning: result.warning,
           })
-        )
+        }
       }
+      await pause(320)
+    }
+
+    if (sendPatient) {
+      if (!draft.patientMessage.trim()) {
+        setPatientSend({ status: 'skipped' })
+      } else {
+        setPatientSend({ status: 'creating' })
+        const result = await sendPatientLabReviewMessageAction(reviewId, draft.patientMessage)
+        if (result.status === 'error') {
+          setPatientSend({ status: 'error', message: result.message })
+          return
+        }
+        if (result.status === 'skipped') setPatientSend({ status: 'skipped' })
+        else {
+          setPatientSend({
+            status: 'sent',
+            ticketId: result.ticketId,
+            sentAs: result.sentAs,
+            warning: result.warning,
+          })
+        }
+      }
+      await pause(320)
     }
 
     if (sendFollowUp) {
       setFollowUpSend({ status: 'creating' })
-      tasks.push(
-        applyLabReviewFollowUpAction(reviewId, JSON.stringify(draft)).then((result) => {
-          if (result.status === 'error') {
-            setFollowUpSend({ status: 'error', message: result.message })
-            return
-          }
-          setFollowUpSend({
-            status: 'applied',
-            actionId: result.actionId,
-            addedFlagIds: result.addedFlagIds,
-            removedFlagIds: result.removedFlagIds,
-            warning: result.warning,
-          })
-        })
-      )
+      const result = await applyLabReviewFollowUpAction(reviewId, JSON.stringify(draft))
+      if (result.status === 'error') {
+        setFollowUpSend({ status: 'error', message: result.message })
+        return
+      }
+      setFollowUpSend({
+        status: 'applied',
+        actionId: result.actionId,
+        addedFlagIds: result.addedFlagIds,
+        removedFlagIds: result.removedFlagIds,
+        warning: result.warning,
+      })
+      await pause(320)
     }
 
-    await Promise.all(tasks)
+    if (sendChartNote) {
+      setChartNoteSend({ status: 'creating' })
+      const snapshotId = protocolSend.status === 'sent' ? protocolSend.snapshotId : null
+      const result = await writeLabReviewChartNoteAction(
+        reviewId,
+        JSON.stringify(draft),
+        snapshotId
+      )
+      if (result.status === 'error') {
+        setChartNoteSend({ status: 'error', message: result.message })
+        return
+      }
+      setChartNoteSend({ status: 'written', warning: result.warning })
+      await pause(320)
+    }
+
+    if (sendClose) {
+      setCloseSend({ status: 'creating' })
+      const result = await closeLabReviewAction(reviewId, JSON.stringify(draft))
+      if (result.status !== 'ok') {
+        setCloseSend({
+          status: 'error',
+          message: result.status === 'error' ? result.message : 'Could not finish this review.',
+        })
+        return
+      }
+      setCloseSend({ status: 'closed', warning: result.warning })
+      setPhase('done')
+    }
   }
 
   return (
-    <Dialog open onOpenChange={(next) => !next && !sending && onEdit()}>
-      {/* 4xl, the same cap as every other dialog in the review. The blocks here are
-          long — a whole patient message, a whole chart note — and the width buys
-          fewer wrapped lines, so less of the screen is spent scrolling. */}
+    <Dialog
+      open
+      onOpenChange={(next) => {
+        if (next || sending) return
+        if (phase === 'done') onFinished()
+        else if (canGoBack) onEdit()
+      }}
+    >
+      {/* Preview stays 4xl so the cards are readable. The approval run is a
+          short list, so it narrows. */}
       <DialogContent
-        className="max-h-[90dvh] w-full gap-0 overflow-y-auto sm:max-w-4xl"
-        showCloseButton={canClose || canGoBack}
+        className={
+          phase === 'preview'
+            ? 'flex max-h-[90dvh] w-full flex-col gap-0 overflow-hidden sm:max-w-4xl'
+            : 'flex max-h-[90dvh] w-full flex-col gap-0 overflow-hidden sm:max-w-lg'
+        }
+        showCloseButton={phase !== 'working'}
       >
-        <DialogHeader className="pb-4 pr-8">
-          <DialogTitle>Before you finish — {patientName}</DialogTitle>
+        <DialogHeader className="shrink-0 pb-4 pr-8">
+          <DialogTitle>
+            {phase === 'done' ? 'Lab review finished' : `Before you finish — ${patientName}`}
+          </DialogTitle>
           <DialogDescription>
-            {sending
-              ? 'Sending the patient message, the recommended protocol, and the customer service follow-up. The review is not finished.'
-              : canClose
-                ? 'The patient message, recommended protocol, and customer service follow-up have been handled. The review is still open — nothing else has been submitted.'
+            {phase === 'working'
+              ? 'Working through the approval.'
+              : phase === 'done'
+                ? 'This lab review has been finished.'
                 : 'Nothing has been submitted. This is what finishing the review would send and record.'}
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex flex-col gap-4 border-t pt-4">
+        <div className="flex min-h-0 flex-col gap-4 overflow-y-auto border-t pt-4">
+          {phase !== 'preview' ? (
+            <ApprovalProgress
+              protocol={protocolSend}
+              patient={patientSend}
+              followUp={followUpSend}
+              chart={chartNoteSend}
+              close={closeSend}
+              finished={phase === 'done'}
+            />
+          ) : (
+            <>
           <Section title="DECISION">
             <ul className="flex flex-col gap-1 text-[13px]">
               <li>{DISPOSITION_LABELS[disposition]}</li>
@@ -390,9 +449,9 @@ export function FinalizeSummaryDialog({
             />
           )}
 
-          {/* Named by reader rather than by field, because the chart card below
-              contains the other two: the note records what the patient was told
-              and what customer service was handed. */}
+          {/* Named by reader rather than by field. The chart is the provider's
+              own note plus a short summary of what else happened — not a paste
+              of the other two documents. */}
           <Destination
             title="THE PATIENT RECEIVES"
             text={audiences.patient}
@@ -407,9 +466,24 @@ export function FinalizeSummaryDialog({
             status={<FollowUpActionStatus send={followUpSend} />}
           />
 
-          {/* Never empty: the note always opens with who reviewed and what they
-              decided, which is the minimum a chart entry has to say. */}
-          <Destination title="THE CHART RECORDS" text={audiences.chart} />
+          <ChartRecords
+            providerNote={draft.providerNote}
+            summary={
+              summary.status === 'generating' && summary.streaming
+                ? summary.streaming
+                : draft.chartSummary
+            }
+            snapshotLine={
+              protocol?.kind === 'quote'
+                ? 'Pricing snapshot: linked when the protocol is sent'
+                : null
+            }
+            generating={summary.status === 'generating'}
+            generated={Boolean(draft.chartSummary.trim())}
+            error={summary.error}
+            onRegenerate={() => void summary.generate()}
+            send={chartNoteSend}
+          />
 
           <Section title="IN THE QUEUE">
             <p className="text-[13px]">{plan.resolution}</p>
@@ -425,25 +499,177 @@ export function FinalizeSummaryDialog({
               <FollowUpFlagStatus send={followUpSend} />
             </Section>
           )}
+            </>
+          )}
         </div>
 
-        <DialogFooter className="mt-4 items-center">
-          <Button variant="outline" onClick={onEdit} disabled={!canGoBack}>
-            Go back and edit
-          </Button>
-          {canClose ? (
-            <>
-              {canRetry && (
-                <Button onClick={() => void approve()}>Retry</Button>
-              )}
-              <Button onClick={onEdit}>Close</Button>
-            </>
+        <DialogFooter className="mt-4 shrink-0 items-center">
+          {phase === 'done' ? (
+            <Link href="/lab-reviews" className={buttonVariants()}>
+              Back to the queue
+            </Link>
+          ) : phase === 'working' ? (
+            canRetry && !sending ? (
+              <Button onClick={() => void approve()}>Retry</Button>
+            ) : null
           ) : (
-            !sending && <Button onClick={() => void approve()}>Approve</Button>
+            <>
+              <Button variant="outline" onClick={onEdit} disabled={!canGoBack}>
+                Go back and edit
+              </Button>
+              <Button onClick={() => void approve()} disabled={summarizing}>
+                Approve
+              </Button>
+            </>
           )}
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+function useChartSummary({
+  events,
+  existing,
+  enabled,
+  onReady,
+}: {
+  events: string
+  existing: string
+  enabled: boolean
+  onReady: (text: string) => void
+}) {
+  const [streaming, setStreaming] = useState('')
+  const [status, setStatus] = useState<'idle' | 'generating' | 'error'>('idle')
+  const [error, setError] = useState<string | null>(null)
+  const abort = useRef<AbortController | null>(null)
+  const autoStarted = useRef(false)
+
+  const generate = useCallback(async () => {
+    abort.current?.abort()
+    const controller = new AbortController()
+    abort.current = controller
+    setStatus('generating')
+    setStreaming('')
+    setError(null)
+
+    try {
+      const response = await fetch('/api/ai/draft', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind: 'chartSummary', events }),
+        signal: controller.signal,
+      })
+
+      if (!response.ok || !response.body) {
+        const message = (await response.text().catch(() => '')) || 'The assistant failed.'
+        setError(message)
+        setStatus('error')
+        return
+      }
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let text = ''
+
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        text += decoder.decode(value, { stream: true })
+        setStreaming(text)
+      }
+
+      const next = text.trim()
+      if (!next) {
+        setError('The assistant returned nothing.')
+        setStatus('error')
+        return
+      }
+
+      onReady(next)
+      setStatus('idle')
+    } catch (cause) {
+      if (controller.signal.aborted) return
+      console.error('[FinalizeSummaryDialog]', cause)
+      setError('The assistant could not be reached.')
+      setStatus('error')
+    } finally {
+      if (abort.current === controller) abort.current = null
+    }
+  }, [events, onReady])
+
+  useEffect(() => {
+    if (!enabled || !events.trim()) return
+    if (existing.trim() || autoStarted.current) return
+    autoStarted.current = true
+    void generate()
+  }, [enabled, events, existing, generate])
+
+  useEffect(() => () => abort.current?.abort(), [])
+
+  return { status, streaming, error, generate }
+}
+
+function ChartRecords({
+  providerNote,
+  summary,
+  snapshotLine,
+  generating,
+  generated,
+  error,
+  onRegenerate,
+  send,
+}: {
+  providerNote: string
+  summary: string
+  snapshotLine?: string | null
+  generating: boolean
+  generated: boolean
+  error: string | null
+  onRegenerate: () => void
+  send: ChartNoteSend
+}) {
+  const note = providerNote.trim()
+
+  return (
+    <Section title="THE CHART RECORDS">
+      {note ? (
+        <p className="rounded-lg border bg-muted/40 px-3 py-2.5 text-[13px] leading-relaxed whitespace-pre-wrap">
+          {note}
+        </p>
+      ) : (
+        <p className="rounded-lg border border-dashed px-3 py-2.5 text-xs text-muted-foreground">
+          Nothing entered in Note for the chart.
+        </p>
+      )}
+      {summary ? (
+        <p className="rounded-lg border bg-muted/40 px-3 py-2.5 text-[13px] leading-relaxed whitespace-pre-wrap">
+          {summary}
+        </p>
+      ) : generating ? (
+        <p
+          aria-live="polite"
+          className="flex items-center gap-1.5 rounded-lg border border-dashed px-3 py-2.5 text-xs text-muted-foreground"
+        >
+          <Loader2 className="size-3.5 animate-spin" aria-hidden />
+          Writing a short summary of everything else…
+        </p>
+      ) : null}
+      {snapshotLine && (
+        <p className="text-[13px] leading-relaxed text-muted-foreground">{snapshotLine}</p>
+      )}
+      {error && (
+        <p role="alert" className="text-xs text-destructive">
+          {error}
+        </p>
+      )}
+      {(generated || error) && !generating && (
+        <Button variant="outline" size="sm" className="self-start" onClick={onRegenerate}>
+          Regenerate summary
+        </Button>
+      )}
+      <ChartNoteStatus send={send} />
+    </Section>
   )
 }
 
@@ -463,6 +689,177 @@ type PreviewState =
  * A failure is a state, not a silent null. Rendering the summary without the quote
  * would present a review that sends a protocol as one that does not.
  */
+type ProgressRow = {
+  key: string
+  running: string
+  done: string
+  skipped?: string
+  state: 'waiting' | 'running' | 'done' | 'skipped' | 'error'
+  detail?: string
+}
+
+function ApprovalProgress({
+  protocol,
+  patient,
+  followUp,
+  chart,
+  close,
+  finished,
+}: {
+  protocol: ProtocolSend
+  patient: PatientSend
+  followUp: FollowUpSend
+  chart: ChartNoteSend
+  close: CloseSend
+  finished: boolean
+}) {
+  const rows: ProgressRow[] = [
+    {
+      key: 'protocol',
+      running: 'Recommended protocol being sent',
+      done: 'Recommended protocol sent',
+      skipped: 'No protocol to send',
+      state:
+        protocol.status === 'idle'
+          ? 'waiting'
+          : protocol.status === 'creating'
+            ? 'running'
+            : protocol.status === 'error'
+              ? 'error'
+              : protocol.status === 'skipped'
+                ? 'skipped'
+                : 'done',
+      detail: protocol.status === 'error' ? protocol.message : protocol.status === 'handed-off'
+        ? 'Customer service will price this by hand'
+        : undefined,
+    },
+    {
+      key: 'patient',
+      running: 'Patient message being sent',
+      done: 'Patient message sent',
+      skipped: 'No patient message to send',
+      state:
+        patient.status === 'idle'
+          ? 'waiting'
+          : patient.status === 'creating'
+            ? 'running'
+            : patient.status === 'error'
+              ? 'error'
+              : patient.status === 'skipped'
+                ? 'skipped'
+                : 'done',
+      detail: patient.status === 'error' ? patient.message : undefined,
+    },
+    {
+      key: 'cs',
+      running: 'Customer service message being sent',
+      done: 'Customer service notified',
+      state:
+        followUp.status === 'idle'
+          ? 'waiting'
+          : followUp.status === 'creating'
+            ? 'running'
+            : followUp.status === 'error'
+              ? 'error'
+              : 'done',
+      detail: followUp.status === 'error' ? followUp.message : undefined,
+    },
+    {
+      key: 'chart',
+      running: 'Chart record being recorded',
+      done: 'Chart record written',
+      state:
+        chart.status === 'idle'
+          ? 'waiting'
+          : chart.status === 'creating'
+            ? 'running'
+            : chart.status === 'error'
+              ? 'error'
+              : 'done',
+      detail: chart.status === 'error' ? chart.message : undefined,
+    },
+    {
+      key: 'close',
+      running: 'Closing the lab review',
+      done: 'Lab review closed',
+      state:
+        close.status === 'idle'
+          ? 'waiting'
+          : close.status === 'creating'
+            ? 'running'
+            : close.status === 'error'
+              ? 'error'
+              : 'done',
+      detail: close.status === 'error' ? close.message : close.status === 'closed' ? close.warning : undefined,
+    },
+  ]
+
+  return (
+    <ol className="flex flex-col gap-2" aria-live="polite">
+      {rows.map((row, index) => (
+        <li
+          key={row.key}
+          className="flex items-start gap-3 rounded-lg border bg-muted/40 px-3 py-2.5 transition-all duration-300"
+          style={{ animationDelay: `${index * 60}ms` }}
+        >
+          <StepGlyph state={row.state} />
+          <div className="min-w-0 flex-1">
+            <p
+              className={
+                row.state === 'waiting'
+                  ? 'text-[13px] text-muted-foreground'
+                  : row.state === 'error'
+                    ? 'text-[13px] text-destructive'
+                    : 'text-[13px]'
+              }
+            >
+              {row.state === 'running'
+                ? row.running
+                : row.state === 'skipped'
+                  ? row.skipped
+                  : row.state === 'error'
+                    ? row.running
+                    : row.state === 'done'
+                      ? row.done
+                      : row.running}
+            </p>
+            {row.detail && (
+              <p className="mt-0.5 text-xs text-muted-foreground">{row.detail}</p>
+            )}
+          </div>
+        </li>
+      ))}
+      {finished && (
+        <li className="pt-2 text-[15px] font-medium animate-in fade-in-0 slide-in-from-bottom-1 duration-300">
+          This lab review has been finished.
+        </li>
+      )}
+    </ol>
+  )
+}
+
+function StepGlyph({ state }: { state: ProgressRow['state'] }) {
+  if (state === 'running') {
+    return <Loader2 className="mt-0.5 size-4 shrink-0 animate-spin text-muted-foreground" aria-hidden />
+  }
+  if (state === 'done' || state === 'skipped') {
+    return (
+      <Check
+        className="mt-0.5 size-4 shrink-0 animate-in zoom-in-50 duration-200"
+        aria-hidden
+      />
+    )
+  }
+  if (state === 'error') {
+    return (
+      <span className="mt-0.5 size-4 shrink-0 text-center text-sm leading-4 text-destructive" aria-hidden>
+        !
+      </span>
+    )
+  }
+  return <span className="mt-0.5 size-4 shrink-0 rounded-full border border-muted-foreground/40" aria-hidden />
+}
+
 function useProtocolPreview(draft: ReviewDraft): PreviewState {
   const [preview, setPreview] = useState<PreviewState>({ state: 'loading' })
 
@@ -568,6 +965,40 @@ function Destination({
       )}
       {status}
     </Section>
+  )
+}
+
+function ChartNoteStatus({ send }: { send: ChartNoteSend }) {
+  if (send.status === 'idle') return null
+
+  if (send.status === 'creating') {
+    return (
+      <p
+        aria-live="polite"
+        className="flex items-center gap-1.5 text-xs text-muted-foreground"
+      >
+        <Loader2 className="size-3.5 animate-spin" aria-hidden />
+        Writing the completion note to the chart…
+      </p>
+    )
+  }
+
+  if (send.status === 'error') {
+    return (
+      <p role="alert" className="text-xs text-destructive">
+        {send.message}
+      </p>
+    )
+  }
+
+  return (
+    <div aria-live="polite" className="flex flex-col gap-1">
+      <p className="flex items-center gap-1.5 text-xs">
+        <Check className="size-3.5" aria-hidden />
+        Written to the chart
+      </p>
+      {send.warning && <p className="text-xs text-muted-foreground">{send.warning}</p>}
+    </div>
   )
 }
 

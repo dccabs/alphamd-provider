@@ -439,6 +439,117 @@ export async function completeLabReview(
 }
 
 /**
+ * Mark the review finished after Approve has already sent the protocol, the
+ * patient message, the customer service action, and the chart note.
+ *
+ * Those writes must not run again here — a second protocol email or a second
+ * completion note is the failure this exists to prevent. What remains is the
+ * review row, any labs or consultation still sitting on the draft, and a
+ * patient-status change the earlier slices do not own.
+ */
+export async function closeLabReview(
+  access: ProviderAccess,
+  reviewId: string,
+  draft: ReviewDraft
+): Promise<MutationResult> {
+  const problems = validateCompletion(draft)
+  if (problems.length) return { ok: false, error: problems.join(' ') }
+
+  const review = await loadForMutation(reviewId)
+  if (!review) return { ok: false, error: 'This review no longer exists.' }
+
+  if (review.status === 'finished') {
+    return { ok: false, error: 'This review is already finished.' }
+  }
+  if (review.assignedTo && review.assignedTo !== access.userId) {
+    const holder = await nameOf(review.assignedTo)
+    return { ok: false, error: `${holder} holds this review. It cannot be finished from here.` }
+  }
+
+  const preflight = [
+    ...(await labOrderProblems(review.patientId, draft.labOrders)),
+    ...(await consultProblems(review.patientId, draft.consultation)),
+  ]
+  if (preflight.length) {
+    return { ok: false, error: `${preflight.join(' ')} Nothing has been saved.` }
+  }
+
+  const admin = createAdminClient()
+  const actor = await resolveActor(access)
+  const plan = planCompletion(draft, actor.displayName, protocolOutcome(await planProtocolFor(draft.newMedications)))
+  const now = new Date().toISOString()
+
+  const { data: updated, error } = await admin
+    .from('lab_reviews')
+    .update({
+      status: 'finished',
+      disposition: draft.disposition,
+      disposition_detail: plan.detail,
+      resolution: plan.resolution,
+      reviewed_at: now,
+      reviewed_by: access.userId,
+      draft,
+      draft_updated_at: now,
+      needs_attention_reason: null,
+      assigned_to: review.assignedTo ?? access.userId,
+      updated_at: now,
+    })
+    .eq('id', reviewId)
+    .neq('status', 'finished')
+    .select('id')
+  if (error) return { ok: false, error: `Could not finish this review: ${error.message}` }
+  if (!updated?.length) {
+    return { ok: false, error: 'This review was finished by somebody else. Reload the page.' }
+  }
+
+  const warnings = await applyClosingEffects(access, review.patientId, plan)
+  warnings.push(...(await placeLabOrders(access, reviewId, draft.labOrders)))
+  warnings.push(...(await sendConsultInvite(access, reviewId, draft.consultation)))
+
+  const logged = await logLabReviewEvent({
+    labReviewId: reviewId,
+    eventType: 'completed',
+    actor,
+    summary: `${actor.displayName} finished the review — ${plan.resolution}`,
+    fromStatus: review.status,
+    toStatus: 'finished',
+    metadata: {
+      disposition: draft.disposition,
+      labOrdersPlaced: draft.labOrders.length,
+      consultationRequested: draft.consultation?.eventTypeId ?? null,
+      sideEffectWarnings: warnings,
+    },
+  })
+  if (!logged.ok) {
+    warnings.push(`the audit log entry failed (${logged.error})`)
+  }
+
+  if (warnings.length) {
+    return {
+      ok: true,
+      warning: `Review finished, but ${warnings.join('; ')}. Tell an administrator.`,
+    }
+  }
+  return { ok: true }
+}
+
+/** Status only. Flags and the chart note were written when Approve sent them. */
+async function applyClosingEffects(
+  access: ProviderAccess,
+  patientId: string,
+  plan: CompletionPlan
+): Promise<string[]> {
+  if (plan.patientStatusId === null) return []
+
+  const admin = createAdminClient()
+  const { error } = await admin
+    .from('user_list')
+    .update({ status: plan.patientStatusId })
+    .eq('user_id', patientId)
+  return error ? ["the patient's status could not be updated"] : []
+}
+
+/**
  * Place the orders the review was carrying, one at a time.
  *
  * `scheduleLabOrder` is reused rather than inlined, so an order placed from a

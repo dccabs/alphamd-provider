@@ -143,9 +143,14 @@ export type ReviewDraft = {
    *  reason as a lab order: approving is what emails them the booking link. */
   consultation: ConsultRequest | null
   csInstructions: string
-  /** The provider's own half of the chart note. The generated half is composed at
-   *  completion, not stored here. */
+  /** The provider's own words for the chart, stored verbatim. */
   providerNote: string
+  /**
+   * A short AI summary of everything else this review did — disposition, meds,
+   * emails, protocol — written when Finalize opens. The chart note is
+   * `providerNote` plus this, and nothing else.
+   */
+  chartSummary: string
   /**
    * Steps the provider has said are not needed — see `reviewSteps.ts`.
    *
@@ -166,6 +171,7 @@ export const EMPTY_DRAFT: ReviewDraft = {
   consultation: null,
   csInstructions: '',
   providerNote: '',
+  chartSummary: '',
   skippedSteps: [],
 }
 
@@ -269,6 +275,7 @@ export function parseDraft(json: unknown): ReviewDraft {
     consultation: parseConsultRequest(raw.consultation),
     csInstructions: str(raw.csInstructions),
     providerNote: providerNoteFrom(raw),
+    chartSummary: str(raw.chartSummary),
     // A draft saved before the flyout was stepped has none, which degrades the
     // right way: whatever it already holds reads as settled, and anything empty is
     // asked about once, rather than a half-written review finishing on silence.

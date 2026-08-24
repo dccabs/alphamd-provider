@@ -6,8 +6,10 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { fetchPatientContext, formatPatientContext } from './patientContext.ts'
 import {
   systemPromptFor,
+  systemPromptForChartSummary,
   systemPromptForField,
   userPromptFor,
+  userPromptForChartSummary,
   userPromptForField,
 } from './prompts.ts'
 import type { ReviewField } from './reviewFields.ts'
@@ -116,6 +118,23 @@ export type FieldDraftInput = {
  * thing here that is not the provider's own prose, and it goes no further than
  * the salutation of a message they are about to read and approve.
  */
+/**
+ * Summarize what a review did, for the chart, from structured events only.
+ *
+ * Same isolation as a field draft: no patient record is read. The events were
+ * composed from the provider's own decisions.
+ */
+export async function streamChartSummary(events: string): Promise<DraftStream> {
+  if (!aiConfigured()) {
+    return { ok: false, error: 'The AI assistant is not configured in this environment.' }
+  }
+
+  return streamCompletion({
+    system: systemPromptForChartSummary(),
+    user: userPromptForChartSummary(events),
+  })
+}
+
 export async function streamFieldDraft(input: FieldDraftInput): Promise<DraftStream> {
   if (!aiConfigured()) {
     return { ok: false, error: 'The AI assistant is not configured in this environment.' }

@@ -113,9 +113,7 @@ export function ReviewModal({
   initialDraft,
   draftUpdatedAt,
   onClose,
-  // Kept for the slice that actually finishes the review. This one only sends
-  // the patient message and leaves the review open.
-  onFinalized: _onFinalized,
+  onFinalized,
 }: {
   reviewId: string
   patientName: string
@@ -546,6 +544,8 @@ export function ReviewModal({
             patientEmail={patientEmail}
             providerName={providerName}
             onEdit={() => setSummary(false)}
+            onChartSummary={(chartSummary) => update({ chartSummary })}
+            onFinished={() => onFinalized()}
           />
         )}
       </DialogContent>

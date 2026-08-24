@@ -138,3 +138,17 @@ export function protocolData(
     source: { labReview: options.labReviewId, pricingVersion: PRICING_VERSION },
   }
 }
+
+/** Where staff open the stored quote. Same path the protocol chart note uses. */
+export function pricingSnapshotHref(
+  snapshotId: string,
+  base = process.env.NEXT_PUBLIC_DEFAULT_URL || 'https://www.alphamd.org'
+): string {
+  return `${base.replace(/\/$/, '')}/pricing/${snapshotId}`
+}
+
+/** The completion note plus the snapshot link, when a quote actually went out. */
+export function withPricingSnapshot(note: string, snapshotId: string | null | undefined): string {
+  if (!snapshotId?.trim()) return note
+  return `${note}\n\nPricing snapshot: ${pricingSnapshotHref(snapshotId.trim())}`
+}

@@ -4,7 +4,13 @@ import { test } from 'node:test'
 import type { DraftMedication } from '../labReviews/reviewDraft.ts'
 import { ANCILLARIES, PRODUCTS, testCatalog } from './__fixtures__/catalog.ts'
 import { planProtocol, type ProtocolQuote } from './protocolPlan.ts'
-import { ANCILLARY_ONLY, protocolData, snapshotRow } from './snapshot.ts'
+import {
+  ANCILLARY_ONLY,
+  pricingSnapshotHref,
+  protocolData,
+  snapshotRow,
+  withPricingSnapshot,
+} from './snapshot.ts'
 
 /**
  * The two payloads, checked against the columns they are written into.
@@ -243,6 +249,22 @@ test('the protocol payload badges each medication by how it is charged', () => {
       dosageSummary: { instructions: '10,000 units' },
     },
   ])
+})
+
+test('the pricing snapshot href is the patient pricing page for that id', () => {
+  assert.equal(
+    pricingSnapshotHref('snap-1', 'https://www.alphamd.org/'),
+    'https://www.alphamd.org/pricing/snap-1'
+  )
+})
+
+test('a completion note gains the snapshot line only when a quote was sent', () => {
+  const note = 'Reviewed labs.\n\nFollow-up needed. A quote was emailed.'
+  assert.equal(withPricingSnapshot(note, null), note)
+  assert.equal(
+    withPricingSnapshot(note, 'snap-1'),
+    `${note}\n\nPricing snapshot: ${pricingSnapshotHref('snap-1')}`
+  )
 })
 
 test('the protocol payload records which review sent it', () => {

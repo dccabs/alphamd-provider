@@ -1,5 +1,5 @@
 import { checkProviderAccess } from '@/lib/authz'
-import { streamDraft, streamFieldDraft, type DraftStream } from '@/lib/ai/draft'
+import { streamChartSummary, streamDraft, streamFieldDraft, type DraftStream } from '@/lib/ai/draft'
 import { isReviewField } from '@/lib/ai/reviewFields'
 import { isAiTask } from '@/lib/ai/tasks'
 import { isReplyIdentity } from '@/lib/labReviews/replyIdentity'
@@ -44,7 +44,9 @@ export async function POST(request: Request) {
 
   let result: DraftStream
 
-  if (isReviewField(input.field)) {
+  if (input.kind === 'chartSummary') {
+    result = await streamChartSummary(text('events'))
+  } else if (isReviewField(input.field)) {
     result = await streamFieldDraft({
       field: input.field,
       existing: text('existing'),

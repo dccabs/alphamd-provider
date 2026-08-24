@@ -295,3 +295,43 @@ export function userPromptForField({
 
   return parts.join('\n\n')
 }
+
+/**
+ * A short chart-completion summary. Not a review field: the provider does not
+ * steer it. Finalize generates it from the structured events of the review.
+ */
+export function systemPromptForChartSummary(): string {
+  return `${SHARED_RULES}
+
+You are writing a SHORT COMPLETION SUMMARY for a lab review chart note.
+
+The provider's own Note for the chart is already on the entry, verbatim, above this summary. Do not repeat it. Do not quote it.
+
+COVER, in two to four sentences, whatever the events include:
+- The disposition.
+- Medications added or changed, by name and dose — not the pharmacy instruction unless that is the only way the dose is stated.
+- That the patient was emailed findings, if they were. Do not paste the email.
+- A recommended protocol or quote, if one went out, including the total if given.
+- Labs ordered or a consultation requested, if any.
+- That customer service was handed follow-up, if they were. Do not paste their instruction block.
+
+RULES:
+- Only facts from the events you are given. No findings, no clinical interpretation, no recommendations, no monitoring plans of your own.
+- Concise and to the point. Plain prose. No Markdown, no headings, no bullets, no asterisks.
+- Third person. Past tense for what was done.
+- If the events are thin, write only what they support and stop.`
+}
+
+export function userPromptForChartSummary(events: string): string {
+  const facts = events.trim()
+  if (!facts) {
+    return 'Nothing was recorded in this review. Reply with an empty response.'
+  }
+
+  return [
+    `# What this review did`,
+    facts,
+    '',
+    'Write the completion summary. Return only its text, with nothing before or after it.',
+  ].join('\n')
+}

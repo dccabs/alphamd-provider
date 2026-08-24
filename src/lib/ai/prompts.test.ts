@@ -3,8 +3,10 @@ import { describe, it } from 'node:test'
 
 import {
   systemPromptFor,
+  systemPromptForChartSummary,
   systemPromptForField,
   userPromptFor,
+  userPromptForChartSummary,
   userPromptForField,
 } from './prompts.ts'
 import { REVIEW_FIELDS } from './reviewFields.ts'
@@ -280,5 +282,29 @@ describe('userPromptForField', () => {
       userPromptForField({ ...base, field: 'csInstructions', instructions: 'book the draw' }),
       /Write the Instructions for customer service field/
     )
+  })
+})
+
+describe('chart summary prompts', () => {
+  it('asks for a short factual wrap-up, not a second note for the chart', () => {
+    const prompt = systemPromptForChartSummary()
+    assert.match(prompt, /SHORT COMPLETION SUMMARY/)
+    assert.match(prompt, /Do not repeat it/)
+    assert.match(prompt, /two to four sentences/)
+    assert.match(prompt, /Do not paste the email/)
+    assert.match(prompt, /Only facts from the events/)
+  })
+
+  it('hands the events as the only source', () => {
+    const prompt = userPromptForChartSummary(
+      'Disposition: Follow-up needed.\nNew medication: Testosterone cypionate — 160mg/week.'
+    )
+    assert.match(prompt, /What this review did/)
+    assert.match(prompt, /Testosterone cypionate — 160mg\/week/)
+    assert.match(prompt, /Write the completion summary/)
+  })
+
+  it('refuses to invent a summary from nothing', () => {
+    assert.match(userPromptForChartSummary('   \n'), /empty response/)
   })
 })

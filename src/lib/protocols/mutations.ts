@@ -22,7 +22,7 @@ import {
   type ProtocolPlan,
   type ProtocolQuote,
 } from './protocolPlan'
-import { protocolData, snapshotRow } from './snapshot'
+import { pricingSnapshotHref, protocolData, snapshotRow } from './snapshot'
 
 /**
  * Sending a recommended protocol, and everything that follows from it.
@@ -350,8 +350,6 @@ function chartNote(
   quote: ProtocolQuote,
   context: { snapshotId: string; sentTo: string | null }
 ): string {
-  const base = process.env.NEXT_PUBLIC_DEFAULT_URL || 'https://www.alphamd.org'
-
   return [
     context.sentTo
       ? `Recommended protocol sent to ${context.sentTo}.`
@@ -362,7 +360,7 @@ function chartNote(
     ['PRICING BREAKDOWN:', ...pricingBreakdown(quote)].join('\n'),
     `Total Due Today: ${formatUsd(quote.grandTotal)}`,
     DISCOUNT_NOTICE,
-    `Pricing snapshot: ${base.replace(/\/$/, '')}/pricing/${context.snapshotId}`,
+    `Pricing snapshot: ${pricingSnapshotHref(context.snapshotId)}`,
   ]
     .filter(Boolean)
     .join('\n\n')

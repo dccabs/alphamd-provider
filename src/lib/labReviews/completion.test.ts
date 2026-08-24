@@ -328,16 +328,56 @@ test('the note carries every filled section, and no empty ones', () => {
     'Dr Smith'
   )
 
-  assert.match(plan.note, /New medication: Anastrozole — 0\.5 mg\./)
-  assert.match(plan.note, /New medication: Vitamin D\./)
+  assert.match(plan.events, /New medication: Anastrozole — 0\.5 mg\./)
+  assert.match(plan.events, /New medication: Vitamin D\./)
   assert.match(plan.note, /Spoke with the patient\./)
-  assert.doesNotMatch(plan.note, /Message for the patient:/)
-  assert.doesNotMatch(plan.note, /ignored/)
+  assert.doesNotMatch(plan.events, /Message for the patient:/)
+  assert.doesNotMatch(plan.events, /ignored/)
 })
 
-test('what the patient was told goes on the chart', () => {
+test('the note for the chart leads the entry', () => {
+  // The provider's own assessment is what someone opening the chart is looking
+  // for. The generated summary (or a one-line fallback) follows it.
+  const plan = planCompletion(
+    draft({
+      disposition: 'continue_protocol',
+      providerNote: 'Hematocrit stable. Continue current protocol.',
+    }),
+    'Dr Smith'
+  )
+
+  assert.ok(plan.note.startsWith('Hematocrit stable. Continue current protocol.'))
+  assert.match(plan.note, /Lab review completed by Dr Smith/)
+})
+
+test('the written note is the provider’s words plus the summary, nothing else', () => {
+  const plan = planCompletion(
+    draft({
+      disposition: 'follow_up_needed',
+      providerNote: 'Reviewed labs; results were normal.',
+      chartSummary: 'Follow-up needed. Testosterone and HCG were added and a quote was emailed.',
+      newMedications: [med({ medicationId: 1, name: 'Testosterone cypionate', dose: '160mg/week' })],
+      patientMessage: 'Your labs look good. We are adding testosterone.',
+    }),
+    'Dr Smith'
+  )
+
+  assert.equal(
+    plan.note,
+    [
+      'Reviewed labs; results were normal.',
+      'Follow-up needed. Testosterone and HCG were added and a quote was emailed.',
+    ].join('\n\n')
+  )
+  assert.match(plan.events, /New medication: Testosterone cypionate/)
+  assert.doesNotMatch(plan.note, /New medication:/)
+  assert.doesNotMatch(plan.note, /Your labs look good/)
+})
+
+test('the chart records that the patient was emailed, not the email itself', () => {
   // The record has to show the result was communicated, not only that it was
-  // read: an abnormal value nobody told the patient about is the claim.
+  // read. The words themselves stay on THE PATIENT RECEIVES — pasting them
+  // here would bury the assessment under a copy of an inbox.
   const plan = planCompletion(
     draft({
       disposition: 'dose_change',
@@ -347,10 +387,10 @@ test('what the patient was told goes on the chart', () => {
     'Dr Smith'
   )
 
-  assert.match(
-    plan.note,
-    /Message for the patient: Your hematocrit is up, so we are lowering your dose\./
-  )
+  assert.match(plan.events, /Patient was emailed findings of lab results with a short summary\./)
+  assert.doesNotMatch(plan.events, /Your hematocrit is up/)
+  assert.doesNotMatch(plan.events, /Message for the patient:/)
+  assert.doesNotMatch(plan.note, /Your hematocrit is up/)
 })
 
 test('an added medication carries its level and the instruction it works out to', () => {
@@ -370,11 +410,11 @@ test('an added medication carries its level and the instruction it works out to'
   )
 
   assert.match(
-    plan.note,
+    plan.events,
     /New medication: Testosterone cypionate — 160mg\/week\. Inject \.4mL subcutaneously every 3\.5 days\./
   )
   assert.match(
-    plan.note,
+    plan.events,
     /For customer service: New medication — Testosterone cypionate: 160mg\/week\. Sig: Inject \.4mL subcutaneously every 3\.5 days\. Add it to the prescription and the next shipment\./
   )
 })
@@ -396,10 +436,10 @@ test('a dose change and an added medication both reach customer service', () => 
     'Dr Smith'
   )
 
-  assert.match(plan.note, /Dose change: Testosterone cypionate — 160mg\/week \(was 140mg\/week\)/)
-  assert.match(plan.note, /New medication: Anastrozole — 1\.00mg - Take 1\/2 tablet/)
-  assert.match(plan.note, /For customer service: Dose change — Testosterone cypionate/)
-  assert.match(plan.note, /New medication — Anastrozole: 1\.00mg - Take 1\/2 tablet/)
+  assert.match(plan.events, /Dose change: Testosterone cypionate — 160mg\/week \(was 140mg\/week\)/)
+  assert.match(plan.events, /New medication: Anastrozole — 1\.00mg - Take 1\/2 tablet/)
+  assert.match(plan.events, /For customer service: Dose change — Testosterone cypionate/)
+  assert.match(plan.events, /New medication — Anastrozole: 1\.00mg - Take 1\/2 tablet/)
 })
 
 test('a catalog dose that is already a sentence is not punctuated twice', () => {
@@ -413,7 +453,7 @@ test('a catalog dose that is already a sentence is not punctuated twice', () => 
     'Dr Smith'
   )
 
-  assert.doesNotMatch(plan.note, /daily\.\./)
+  assert.doesNotMatch(plan.events, /daily\.\./)
 })
 
 test('the detail keeps the catalog row and the sig behind each added medication', () => {
@@ -456,7 +496,7 @@ test('the note says what the dose changed from, not only what it is now', () => 
   )
 
   assert.match(
-    plan.note,
+    plan.events,
     /Dose change: Testosterone cypionate — 160mg\/week \(was 140mg\/week\)\. Inject \.4mL subcutaneously every 3\.5 days\./
   )
 })
@@ -480,18 +520,19 @@ test('two medications changed in one review each get their own line', () => {
     'Dr Smith'
   )
 
-  assert.match(plan.note, /Dose change: Testosterone cypionate — 160mg\/week \(was 140mg\/week\)/)
-  assert.match(plan.note, /Dose change: Anastrozole — 0\.25mg twice weekly \(was 0\.5mg twice weekly\)/)
-  assert.match(plan.note, /For customer service: Dose change — Testosterone cypionate/)
-  assert.match(plan.note, /Dose change — Anastrozole: 0\.5mg twice weekly → 0\.25mg twice weekly\./)
+  assert.match(plan.events, /Dose change: Testosterone cypionate — 160mg\/week \(was 140mg\/week\)/)
+  assert.match(plan.events, /Dose change: Anastrozole — 0\.25mg twice weekly \(was 0\.5mg twice weekly\)/)
+  assert.match(plan.events, /For customer service: Dose change — Testosterone cypionate/)
+  assert.match(plan.events, /Dose change — Anastrozole: 0\.5mg twice weekly → 0\.25mg twice weekly\./)
 
   // Confirmed first is written first, in both halves, so the note reads in the
   // order the decisions were made.
-  const chart = plan.note.indexOf('Dose change: Testosterone')
-  const chartSecond = plan.note.indexOf('Dose change: Anastrozole')
+  const chart = plan.events.indexOf('Dose change: Testosterone')
+  const chartSecond = plan.events.indexOf('Dose change: Anastrozole')
   assert.ok(chart < chartSecond && chart !== -1)
   assert.ok(
-    plan.note.indexOf('Dose change — Testosterone') < plan.note.indexOf('Dose change — Anastrozole')
+    plan.events.indexOf('Dose change — Testosterone') <
+      plan.events.indexOf('Dose change — Anastrozole')
   )
 })
 
@@ -504,8 +545,8 @@ test('a half-recorded change is left out of the note rather than half-written', 
     'Dr Smith'
   )
 
-  assert.match(plan.note, /Dose change: Testosterone cypionate/)
-  assert.doesNotMatch(plan.note, /Anastrozole/)
+  assert.match(plan.events, /Dose change: Testosterone cypionate/)
+  assert.doesNotMatch(plan.events, /Anastrozole/)
 })
 
 test('a dose change reaches customer service without being retyped', () => {
@@ -519,12 +560,12 @@ test('a dose change reaches customer service without being retyped', () => {
   )
 
   assert.match(
-    plan.note,
+    plan.events,
     /For customer service: Dose change — Testosterone cypionate: 140mg\/week → 160mg\/week\./
   )
-  assert.match(plan.note, /Update the prescription and the next shipment\./)
+  assert.match(plan.events, /Update the prescription and the next shipment\./)
   // What the provider typed survives alongside it.
-  assert.match(plan.note, /Also book a phlebotomy/)
+  assert.match(plan.events, /Also book a phlebotomy/)
 })
 
 test('changing only the route does not read as an error in the note', () => {
@@ -545,11 +586,11 @@ test('changing only the route does not read as an error in the note', () => {
   )
 
   assert.match(
-    plan.note,
+    plan.events,
     /Dose change: Testosterone cypionate — 160mg\/week\. Inject \.4mL intramuscularly every 3\.5 days\./
   )
-  assert.doesNotMatch(plan.note, /was 160mg\/week/)
-  assert.match(plan.note, /For customer service: Dose change — Testosterone cypionate: 160mg\/week\./)
+  assert.doesNotMatch(plan.events, /was 160mg\/week/)
+  assert.match(plan.events, /For customer service: Dose change — Testosterone cypionate: 160mg\/week\./)
 })
 
 test('a dose typed as free text carries no generated instruction', () => {
@@ -568,8 +609,8 @@ test('a dose typed as free text carries no generated instruction', () => {
     'Dr Smith'
   )
 
-  assert.match(plan.note, /Dose change: Anastrozole — 0\.25mg twice weekly \(was 0\.5mg/)
-  assert.doesNotMatch(plan.note, /Inject/)
+  assert.match(plan.events, /Dose change: Anastrozole — 0\.25mg twice weekly \(was 0\.5mg/)
+  assert.doesNotMatch(plan.events, /Inject/)
 })
 
 test('only a dose change puts a dose in the customer service block', () => {
@@ -581,8 +622,8 @@ test('only a dose change puts a dose in the customer service block', () => {
     'Dr Smith'
   )
 
-  assert.doesNotMatch(plan.note, /Dose change/)
-  assert.doesNotMatch(plan.note, /For customer service/)
+  assert.doesNotMatch(plan.events, /Dose change/)
+  assert.doesNotMatch(plan.events, /For customer service/)
   assert.deepEqual(plan.detail.doseChanges, [])
 })
 
@@ -696,13 +737,13 @@ test('a requested consultation reaches the chart, the hand-off and the record', 
   )
 
   assert.match(
-    plan.note,
+    plan.events,
     /Consultation requested: AlphaMD Provider, Secondary Follow-Up · 15 minutes/
   )
   // Customer service does not arrange it, but they are who the patient asks why
   // a booking link arrived.
-  assert.match(plan.note, /For customer service: Consultation — the patient is emailed a booking link/)
-  assert.match(plan.note, /They book it themselves\./)
+  assert.match(plan.events, /For customer service: Consultation — the patient is emailed a booking link/)
+  assert.match(plan.events, /They book it themselves\./)
   assert.deepEqual(plan.detail.consultation, {
     eventTypeId: FOLLOW_UP,
     eventTypeName: 'AlphaMD Provider, Secondary Follow-Up',
@@ -752,9 +793,9 @@ test('an ordered lab reaches the chart, the hand-off and the record', () => {
     'Dr Smith'
   )
 
-  assert.match(plan.note, /Labs ordered: Now — CBC \(85025\), CMP \(80053\)/)
-  assert.match(plan.note, /For customer service: Labs ordered — Now — CBC \(85025\)/)
-  assert.match(plan.note, /nothing to do here unless they ask about it/)
+  assert.match(plan.events, /Labs ordered: Now — CBC \(85025\), CMP \(80053\)/)
+  assert.match(plan.events, /For customer service: Labs ordered — Now — CBC \(85025\)/)
+  assert.match(plan.events, /nothing to do here unless they ask about it/)
   // Kept whole, so a later reader can see what the review decided to send even
   // if the requisition that went out disagrees.
   assert.deepEqual(plan.detail.labOrders, [order])
@@ -770,9 +811,9 @@ test('two orders in one review each get their own line, and one explanation', ()
     'Dr Smith'
   )
 
-  assert.match(plan.note, /Labs ordered: Now — CBC \(85025\)/)
-  assert.match(plan.note, /Labs ordered: Jan 4, 2099 — CBC \(85025\)/)
-  assert.equal(plan.note.match(/nothing to do here unless they ask/g)?.length, 1)
+  assert.match(plan.events, /Labs ordered: Now — CBC \(85025\)/)
+  assert.match(plan.events, /Labs ordered: Jan 4, 2099 — CBC \(85025\)/)
+  assert.equal(plan.events.match(/nothing to do here unless they ask/g)?.length, 1)
 })
 
 test('the resolution leads with when labs are coming, not which tests', () => {
@@ -840,24 +881,28 @@ test('the booking link itself is not in the previewed or recorded text', () => {
 
 test('a consultation with no message written still tells the patient how to book', () => {
   // Being asked to come in and told nothing about how would be the one combination
-  // the patient cannot act on.
+  // the patient cannot act on. The chart already has the consultation line; it
+  // does not also paste the booking paragraph.
   const audiences = reviewAudiences(
     draft({ disposition: 'follow_up_needed', consultation: consult() }),
     'Dr Smith'
   )
 
   assert.match(audiences.patient, /To book your AlphaMD Provider, Secondary Follow-Up/)
-  assert.match(audiences.chart, /Message for the patient: To book your/)
+  assert.match(audiences.events, /Consultation requested/)
+  assert.doesNotMatch(audiences.chart, /To book your/)
+  assert.doesNotMatch(audiences.chart, /Patient was emailed findings/)
 })
 
-test('the customer service text is the same text the note carries', () => {
-  // The whole point of composing this once. If the summary and the chart could
-  // disagree, the thing they disagreed about would be a prescription.
+test('the customer service text is the same text the events carry', () => {
+  // Composed once for the CS card and the AI source. The chart no longer pastes
+  // that block — it gets a short summary instead.
   const audiences = reviewAudiences(full, 'Dr Smith')
-  const note = planCompletion(full, 'Dr Smith').note
+  const plan = planCompletion(full, 'Dr Smith')
 
   assert.ok(audiences.customerService.length > 0)
-  assert.ok(note.includes(`For customer service: ${audiences.customerService}`))
+  assert.ok(plan.events.includes(`For customer service: ${audiences.customerService}`))
+  assert.equal(audiences.events, plan.events)
 })
 
 test('customer service is handed the changes before the provider’s own hand-off', () => {
@@ -921,14 +966,14 @@ const HANDED_OFF: ProtocolOutcome = {
   reasons: ['Sermorelin (300mcg) — more than one product matches; pick one.'],
 }
 
-test('a quote is stated once on the chart, without the breakdown', () => {
+test('a quote is stated once in the events, without the breakdown', () => {
   // `sendProtocol` writes a second note carrying the full pricing. Two versions of
   // one price on a chart is how they come to disagree.
-  const note = planCompletion(full, 'Dr Smith', QUOTE).note
+  const plan = planCompletion(full, 'Dr Smith', QUOTE)
 
-  assert.match(note, /Recommended protocol sent — \$137\.39 due today\./)
-  assert.match(note, /Quoted at list price/)
-  assert.equal(note.includes('Base Price: $129.00/mo'), false)
+  assert.match(plan.events, /Recommended protocol sent — \$137\.39 due today\./)
+  assert.match(plan.events, /Quoted at list price/)
+  assert.equal(plan.events.includes('Base Price: $129.00/mo'), false)
 })
 
 test('customer service is told a quote needs nothing from them, and why to expect a call', () => {
@@ -945,14 +990,14 @@ test('a handoff is a task, and reads as one', () => {
   assert.match(audiences.customerService, /price this one by hand and send it/)
   assert.match(audiences.customerService, /more than one product matches/)
 
-  assert.match(audiences.chart, /A recommended protocol was not sent/)
-  assert.match(audiences.chart, /more than one product matches/)
+  assert.match(audiences.events, /A recommended protocol was not sent/)
+  assert.match(audiences.events, /more than one product matches/)
 })
 
 test('a handoff never claims a price went out', () => {
   const audiences = reviewAudiences(full, 'Dr Smith', HANDED_OFF)
 
-  assert.equal(audiences.chart.includes('protocol sent'), false)
+  assert.equal(audiences.events.includes('protocol sent'), false)
   assert.equal(audiences.patient.includes('protocol'), false)
 })
 
@@ -974,15 +1019,16 @@ test('a review that sends no protocol reads exactly as it did before quoting exi
   )
 })
 
-test('the customer service text the summary shows is still the text the note carries', () => {
+test('the customer service text the summary shows is still the text the events carry', () => {
   // The invariant from above, re-checked with a quote in play: the protocol lines
   // go through the same composition rather than being appended for display.
   for (const outcome of [QUOTE, HANDED_OFF, null]) {
     const audiences = reviewAudiences(full, 'Dr Smith', outcome)
-    const note = planCompletion(full, 'Dr Smith', outcome).note
+    const plan = planCompletion(full, 'Dr Smith', outcome)
 
-    assert.ok(note.includes(`For customer service: ${audiences.customerService}`))
-    assert.equal(audiences.chart, note)
+    assert.ok(plan.events.includes(`For customer service: ${audiences.customerService}`))
+    assert.equal(audiences.chart, plan.note)
+    assert.equal(audiences.events, plan.events)
   }
 })
 

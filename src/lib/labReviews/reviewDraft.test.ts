@@ -63,6 +63,7 @@ test('a full draft round-trips', () => {
     },
     csInstructions: 'Book a phlebotomy',
     providerNote: 'Discussed with patient',
+    chartSummary: 'Follow-up needed. New medications were added and the patient was emailed.',
     skippedSteps: ['doseChanges'],
   }
 
@@ -289,9 +290,23 @@ test('a prescription id on a dose change is only kept if it could be a row id', 
 })
 
 test('non-string text fields fall back to empty', () => {
-  const draft = parseDraft({ patientMessage: { a: 1 }, providerNote: 12, concerns: [] })
+  const draft = parseDraft({ patientMessage: { a: 1 }, providerNote: 12, concerns: [], chartSummary: 4 })
   assert.equal(draft.patientMessage, '')
   assert.equal(draft.providerNote, '')
+  assert.equal(draft.chartSummary, '')
+})
+
+test('a saved chart summary survives the round trip', () => {
+  assert.equal(
+    parseDraft({ chartSummary: 'New medications added; patient emailed.' }).chartSummary,
+    'New medications added; patient emailed.'
+  )
+})
+
+test('a chart summary alone is not worth saving', () => {
+  // It is generated from the other fields. Keeping a leftover summary would
+  // make an otherwise empty draft look like work.
+  assert.ok(isDraftEmpty({ ...EMPTY_DRAFT, chartSummary: 'Something happened.' }))
 })
 
 test('the empty draft is empty', () => {
