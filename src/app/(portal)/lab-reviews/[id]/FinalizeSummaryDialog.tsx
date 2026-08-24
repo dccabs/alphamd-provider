@@ -858,8 +858,9 @@ function ApprovalProgress({
     },
     {
       key: 'cs',
-      running: 'Customer service message being sent',
-      done: 'Customer service notified',
+      running: 'Checking for a customer service action',
+      done: 'Customer service action created',
+      skipped: 'No customer service action',
       state:
         followUp.status === 'idle'
           ? 'waiting'
@@ -867,7 +868,9 @@ function ApprovalProgress({
             ? 'running'
             : followUp.status === 'error'
               ? 'error'
-              : 'done',
+              : followUp.status === 'applied' && followUp.actionId
+                ? 'done'
+                : 'skipped',
       detail: followUp.status === 'error' ? followUp.message : undefined,
     },
     {

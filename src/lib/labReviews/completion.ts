@@ -151,9 +151,21 @@ export function validateCompletion(draft: ReviewDraft): string[] {
   // "No changes; continue as prescribed" and a new prescription cannot both be
   // true. Reachable by adding one and then landing on this disposition, and worth
   // catching, because the note it would write contradicts itself.
-  if (draft.disposition === 'continue_protocol' && namedMedications(draft).length > 0) {
+  if (
+    (draft.disposition === 'continue_protocol' ||
+      draft.disposition === 'treatment_not_recommended') &&
+    namedMedications(draft).length > 0
+  ) {
     problems.push(
-      'Continuing the protocol as designed cannot also add a medication. Remove it, or choose another disposition.'
+      draft.disposition === 'continue_protocol'
+        ? 'Continuing the protocol as designed cannot also add a medication. Remove it, or choose another disposition.'
+        : 'Treatment not recommended cannot also add a medication. Remove it, or choose Treatment recommended.'
+    )
+  }
+
+  if (draft.disposition === 'treatment_not_recommended' && draft.labOrders.length > 0) {
+    problems.push(
+      'Treatment not recommended cannot also order labs. Remove them, or choose another disposition.'
     )
   }
 
@@ -165,6 +177,17 @@ export function validateCompletion(draft: ReviewDraft): string[] {
     problems.push(
       'Say what the follow-up is: a message for the patient, instructions for customer service, a lab order, a consultation, or a new medication.'
     )
+  }
+
+  // Declining treatment is a close-out: the Patient has to be told, and the
+  // chart has to say why. Customer service is not in this path.
+  if (draft.disposition === 'treatment_not_recommended') {
+    if (!draft.providerNote.trim()) {
+      problems.push('Write a note for the chart: why treatment is not recommended.')
+    }
+    if (!draft.patientMessage.trim()) {
+      problems.push('Write a message for the patient.')
+    }
   }
 
   problems.push(...validateConsultRequest(draft.consultation))

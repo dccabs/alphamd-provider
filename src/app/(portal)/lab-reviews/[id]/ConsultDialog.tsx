@@ -38,11 +38,10 @@ import { mintConsultLinkAction } from '../actions'
  * anything, and a link on screen beforehand is a link that can be sent out of band
  * from a review nobody has confirmed.
  *
- * The types are ordered by what suits this patient rather than filtered to it.
- * `eventTypesFor` puts the appropriate ones first and keeps the rest one click
- * away, because patient status and recorded gender are both routinely stale or
- * blank and a provider who knows the patient should not be blocked by a field that
- * disagrees.
+ * The types are ordered rather than filtered. This screen always leads with
+ * follow-ups — a Lab Review already has results — and keeps initials one click
+ * away, because recorded gender is routinely stale and a provider who knows the
+ * Patient should not be blocked by a field that disagrees.
  *
  * Appointments the patient has already booked are shown at the top. Without them a
  * provider cannot see that the patient is booked for Thursday, and a second
@@ -78,7 +77,14 @@ export function ConsultDialog({
   const [error, setError] = useState<string | null>(null)
 
   const { suggested, other } = useMemo(
-    () => eventTypesFor({ statusId: patientStatusId, gender: patientGender }),
+    () =>
+      eventTypesFor({
+        statusId: patientStatusId,
+        gender: patientGender,
+        // This screen is a Lab Review: results are already here. Follow-ups
+        // first, even when the Patient is still Onboarding.
+        suggest: 'follow_up',
+      }),
     [patientGender, patientStatusId]
   )
 

@@ -150,19 +150,30 @@ function isFemale(gender: string | null | undefined): boolean {
  * both often stale or blank, and a provider who knows the patient should not be
  * blocked by a status field that disagrees.
  *
+ * `suggest` overrides the status-based audience. A Lab Review already has
+ * results, so that screen asks for follow-ups even when the Patient is still
+ * Onboarding — an "Initial (No Test Results)" slot is the wrong offer there.
+ *
  * `suggested` is what the UI groups on.
  */
 export function eventTypesFor(patient: {
   statusId: number | null
   gender: string | null
+  suggest?: 'follow_up' | 'initial' | 'by_status'
 }): { suggested: ConsultationEventType[]; other: ConsultationEventType[] } {
-  const member = isActiveMember(patient.statusId)
+  const audience =
+    patient.suggest === 'follow_up'
+      ? 'member'
+      : patient.suggest === 'initial'
+        ? 'non_member'
+        : isActiveMember(patient.statusId)
+          ? 'member'
+          : 'non_member'
   const female = isFemale(patient.gender)
   const wantedGender = female ? 'female' : 'male'
 
   const fits = (type: ConsultationEventType) =>
-    type.audience === (member ? 'member' : 'non_member') &&
-    (type.gender === null || type.gender === wantedGender)
+    type.audience === audience && (type.gender === null || type.gender === wantedGender)
 
   return {
     suggested: CONSULTATION_EVENT_TYPES.filter(fits),

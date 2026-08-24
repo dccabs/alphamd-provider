@@ -13,6 +13,7 @@ import {
 import {
   DISPOSITIONS,
   EMPTY_DRAFT,
+  type Disposition,
   type DoseChange,
   type DraftMedication,
   type ReviewDraft,
@@ -69,6 +70,15 @@ const testosterone = change({
   value: '160mg/week',
   sig: 'Inject .4mL subcutaneously every 3.5 days.',
 })
+
+/** Fields a close-out requires that other dispositions do not. */
+function closeOut(disposition: Disposition): Partial<ReviewDraft> {
+  if (disposition !== 'treatment_not_recommended') return {}
+  return {
+    providerNote: 'Hematocrit and symptoms do not support starting.',
+    patientMessage: 'We are not recommending treatment at this time.',
+  }
+}
 
 test('a review with no disposition cannot be finished', () => {
   assert.deepEqual(validateCompletion(draft()), ['Choose a disposition before finishing.'])
@@ -168,6 +178,47 @@ test('a follow-up with nothing recorded cannot be finished', () => {
   assert.match(problems[0], /Say what the follow-up is/)
 })
 
+test('declining treatment requires a chart note and a patient message', () => {
+  assert.deepEqual(validateCompletion(draft({ disposition: 'treatment_not_recommended' })), [
+    'Write a note for the chart: why treatment is not recommended.',
+    'Write a message for the patient.',
+  ])
+
+  assert.deepEqual(
+    validateCompletion(
+      draft({
+        disposition: 'treatment_not_recommended',
+        providerNote: 'Hematocrit and symptoms do not support starting.',
+      })
+    ),
+    ['Write a message for the patient.']
+  )
+
+  assert.deepEqual(
+    validateCompletion(
+      draft({
+        disposition: 'treatment_not_recommended',
+        providerNote: 'Hematocrit and symptoms do not support starting.',
+        patientMessage: 'We are not recommending treatment at this time.',
+      })
+    ),
+    []
+  )
+})
+
+test('declining treatment cannot also add a medication', () => {
+  const problems = validateCompletion(
+    draft({
+      disposition: 'treatment_not_recommended',
+      providerNote: 'Not a candidate.',
+      patientMessage: 'We are not recommending treatment.',
+      newMedications: [med({ name: 'Anastrozole', dose: '0.5mg twice weekly' })],
+    })
+  )
+  assert.equal(problems.length, 1)
+  assert.match(problems[0], /cannot also add a medication/)
+})
+
 test('any one recorded thing is enough of a follow-up', () => {
   // The checkbox group this replaces asked the provider to declare what the
   // follow-up needed, next to the panels where they do it. Checking the recorded
@@ -229,6 +280,7 @@ test('a consultation can be requested under any disposition', () => {
           disposition,
           doseChanges: disposition === 'dose_change' ? [testosterone] : [],
           consultation: consult(),
+          ...closeOut(disposition),
         })
       ),
       [],
@@ -237,22 +289,35 @@ test('a consultation can be requested under any disposition', () => {
   }
 })
 
-test('labs can be ordered under any disposition', () => {
+test('labs can be ordered under every disposition except a close-out', () => {
   // Continuing a protocol as designed still means labs on an interval, and that
   // is the disposition most reviews land on.
-  for (const disposition of DISPOSITIONS) {
+  for (const disposition of DISPOSITIONS.filter((d) => d !== 'treatment_not_recommended')) {
     assert.deepEqual(
       validateCompletion(
         draft({
           disposition,
           doseChanges: disposition === 'dose_change' ? [testosterone] : [],
           labOrders: [labs({ timing: 'in_12_weeks' })],
+          ...closeOut(disposition),
         })
       ),
       [],
       disposition
     )
   }
+})
+
+test('declining treatment cannot also order labs', () => {
+  const problems = validateCompletion(
+    draft({
+      disposition: 'treatment_not_recommended',
+      providerNote: 'Not a candidate.',
+      patientMessage: 'We are not recommending treatment.',
+      labOrders: [labs()],
+    })
+  )
+  assert.match(problems[0], /cannot also order labs/)
 })
 
 test('every disposition clears the "Needs lab review" flag', () => {

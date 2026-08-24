@@ -43,6 +43,17 @@ describe('eventTypesFor', () => {
     assert.ok(suggested.every((t) => t.audience === 'non_member'))
   })
 
+  it('can prefer follow-ups even when the patient is still onboarding', () => {
+    const { suggested } = eventTypesFor({
+      statusId: 21,
+      gender: 'male',
+      suggest: 'follow_up',
+    })
+    assert.ok(suggested.every((t) => t.audience === 'member'))
+    assert.ok(suggested.some((t) => t.name === 'Trace Owens, Secondary Follow-Up'))
+    assert.ok(!suggested.some((t) => t.name.includes('Initial')))
+  })
+
   it('offers the female variants for a female patient and not the male ones', () => {
     const { suggested } = eventTypesFor({ statusId: 8, gender: 'Female' })
     assert.ok(suggested.some((t) => t.gender === 'female'))

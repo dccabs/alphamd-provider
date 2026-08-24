@@ -118,10 +118,19 @@ export function stepsFor(draft: ReviewDraft): ReviewStepId[] {
     if (step === 'doseChanges') {
       return draft.disposition === 'dose_change' || hasContent(step, draft)
     }
-    // Continuing as designed is a statement that nothing is changing, so there is
-    // nothing to add.
+    // Continuing as designed, and declining treatment, are both statements that
+    // nothing is being started.
     if (step === 'newMedications') {
-      return draft.disposition !== 'continue_protocol' || hasContent(step, draft)
+      return (
+        (draft.disposition !== 'continue_protocol' &&
+          draft.disposition !== 'treatment_not_recommended') ||
+        hasContent(step, draft)
+      )
+    }
+    // Declining treatment is a close-out. A consult to explain it is still
+    // useful; ordering more labs is not.
+    if (step === 'labOrders') {
+      return draft.disposition !== 'treatment_not_recommended' || hasContent(step, draft)
     }
     return true
   })

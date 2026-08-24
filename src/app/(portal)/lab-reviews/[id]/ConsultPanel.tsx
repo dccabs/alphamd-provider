@@ -34,7 +34,7 @@ export function ConsultPanel({
   /** Needed to mint the booking link, which is bound to this review's patient. */
   reviewId: string
   patientEmail: string | null
-  /** `user_list.status`, which decides whether member follow-ups are suggested. */
+  /** `user_list.status`. Follow-ups are suggested on this screen regardless. */
   patientStatusId: number | null
   patientGender: string | null
   /** What the patient has already booked, so a second link is a deliberate act. */

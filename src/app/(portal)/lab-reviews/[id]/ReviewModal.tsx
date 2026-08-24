@@ -238,6 +238,7 @@ export function ReviewModal({
 
   const options = dispositionsFor(patientStatus)
   const continuing = draft.disposition === 'continue_protocol'
+  const declining = draft.disposition === 'treatment_not_recommended'
 
   const steps = stepsFor(draft)
   const current = pinnedOpenStep(draft, pin)
@@ -367,23 +368,24 @@ export function ReviewModal({
             />
           </ReviewStep>
 
-          {/* Under every disposition but "continue protocol". Raising a dose and
-              starting something new is one decision, and a provider who has
-              picked "Dose change" still has to be able to record the second half
-              of it. */}
+          {/* Under every disposition but "continue protocol" and "treatment not
+              recommended". Raising a dose and starting something new is one
+              decision, and a provider who has picked "Dose change" still has to
+              be able to record the second half of it. */}
           <ReviewStep {...stepProps('newMedications')} onOpen={setPin} onAdvance={advance}>
             <NewMedicationPanel
               catalog={catalog}
               medications={medications}
               dosageOptions={dosageOptions}
               added={draft.newMedications}
-              canAdd={!continuing}
+              canAdd={!continuing && !declining}
               onChange={(newMedications) => update({ newMedications })}
             />
           </ReviewStep>
 
-          {/* Under every disposition, including "continue protocol": labs on an
-              interval are how continuing as designed gets checked. */}
+          {/* Under every disposition except declining treatment. Labs on an
+              interval are how continuing as designed gets checked; a close-out
+              does not order more. */}
           <ReviewStep {...stepProps('labOrders')} onOpen={setPin} onAdvance={advance}>
             <LabOrdersPanel
               patientState={patientState}

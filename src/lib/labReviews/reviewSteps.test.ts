@@ -106,6 +106,11 @@ test('continuing the protocol as designed does not ask for a new medication', ()
   assert.ok(stepsFor(draft({ disposition: 'dose_change' })).includes('newMedications'))
 })
 
+test('declining treatment does not ask for a new medication', () => {
+  assert.ok(!stepsFor(draft({ disposition: 'treatment_not_recommended' })).includes('newMedications'))
+  assert.ok(stepsFor(draft({ disposition: 'treatment_recommended' })).includes('newMedications'))
+})
+
 // This is the case that makes the review recoverable: `validateCompletion` refuses
 // to finish with a dose change recorded under another disposition, so the panel
 // holding it has to stay on screen to be emptied.
@@ -121,12 +126,23 @@ test('a step that no longer applies and holds nothing drops out', () => {
   assert.ok(!stepsFor(empty).includes('doseChanges'))
 })
 
-test('labs and a consultation are offered under every disposition', () => {
-  for (const disposition of ['dose_change', 'continue_protocol', 'follow_up_needed'] as const) {
+test('labs and a consultation are offered under every disposition except a close-out', () => {
+  for (const disposition of [
+    'dose_change',
+    'continue_protocol',
+    'follow_up_needed',
+    'treatment_recommended',
+  ] as const) {
     const steps = stepsFor(draft({ disposition }))
     assert.ok(steps.includes('labOrders'), `${disposition} does not offer labs`)
     assert.ok(steps.includes('consultation'), `${disposition} does not offer a consultation`)
   }
+})
+
+test('declining treatment offers a consult and not labs', () => {
+  const steps = stepsFor(draft({ disposition: 'treatment_not_recommended' }))
+  assert.ok(!steps.includes('labOrders'))
+  assert.ok(steps.includes('consultation'))
 })
 
 // --- content and settling ---------------------------------------------------
