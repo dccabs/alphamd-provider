@@ -1,5 +1,6 @@
 // Explicit `.ts` specifier, like the other modules `npm test` runs through Node's
 // type stripping. See the note on `allowImportingTsExtensions` in tsconfig.json.
+import { readDose } from './dosing.ts'
 import { shortDate } from './format.ts'
 
 /**
@@ -78,4 +79,30 @@ export function orderMedications<T extends { name: string }>(medications: T[]): 
   return [...medications].sort(
     (a, b) => Number(TESTOSTERONE.test(b.name)) - Number(TESTOSTERONE.test(a.name))
   )
+}
+
+/** Short enough for the snapshot line. Cypionate is the one name that is both
+ *  long and the medication almost every review is about. */
+export function shortMedicationName(name: string): string {
+  return name.replace(/\bcypionate\b/i, 'cyp').replace(/\s+/g, ' ').trim()
+}
+
+/**
+ * The one-line snapshot of what the patient is on.
+ *
+ * Active prescriptions only: expired ones stay in the details dialog. A weekly
+ * milligram figure is appended when `readDose` can establish one, so the line
+ * can say `Testosterone cyp - 160mg` instead of the full injection sentence.
+ */
+export function medicationSummaryLine(
+  medications: { name: string; dosage: string | null; active: boolean }[]
+): string {
+  const active = orderMedications(medications.filter((med) => med.active))
+  return active
+    .map((med) => {
+      const name = shortMedicationName(med.name)
+      const dose = readDose(med)
+      return dose.kind === 'injection' ? `${name} - ${dose.weeklyMg}mg` : name
+    })
+    .join(', ')
 }

@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { expirationLabel, expiryStatus, orderMedications } from './medications.ts'
+import {
+  expirationLabel,
+  expiryStatus,
+  medicationSummaryLine,
+  orderMedications,
+  shortMedicationName,
+} from './medications.ts'
 
 /** A fixed "now" so nothing here depends on the day the suite runs. */
 const NOW = new Date('2026-08-17T14:00:00Z')
@@ -107,6 +113,53 @@ test('two testosterones keep their order relative to each other', () => {
     'Testosterone cream',
     'Anastrozole',
   ])
+})
+
+test('cypionate shortens on the snapshot line', () => {
+  assert.equal(shortMedicationName('Testosterone cypionate'), 'Testosterone cyp')
+  assert.equal(shortMedicationName('HCG'), 'HCG')
+})
+
+test('the snapshot line is the active names, with a weekly dose when it is known', () => {
+  assert.equal(
+    medicationSummaryLine([
+      {
+        name: 'Anastrozole',
+        dosage: '1.00mg - Take 1/2 tablet (0.50mg) by mouth twice weekly.',
+        active: true,
+      },
+      {
+        name: 'HCG',
+        dosage: '1,000 Units Weekly - Mix with 10ML solvent.',
+        active: true,
+      },
+      {
+        name: 'Testosterone cypionate',
+        dosage: 'Inject .4mL subcutaneously twice weekly on same days every week.',
+        active: true,
+      },
+    ]),
+    'Testosterone cyp - 160mg, Anastrozole, HCG'
+  )
+})
+
+test('expired prescriptions stay off the snapshot line', () => {
+  assert.equal(
+    medicationSummaryLine([
+      { name: 'Testosterone cypionate', dosage: 'Inject .4mL subcutaneously twice weekly.', active: false },
+      { name: 'HCG', dosage: '1,000 Units Weekly', active: true },
+    ]),
+    'HCG'
+  )
+})
+
+test('a cream is named without a invented milligram figure', () => {
+  assert.equal(
+    medicationSummaryLine([
+      { name: 'Testosterone cream', dosage: 'Apply 3 clicks daily.', active: true },
+    ]),
+    'Testosterone cream'
+  )
 })
 
 test('the caller’s array is not reordered underneath it', () => {

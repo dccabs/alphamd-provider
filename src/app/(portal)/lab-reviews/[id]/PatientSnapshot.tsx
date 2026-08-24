@@ -16,12 +16,12 @@ import {
   type Consultation,
 } from '@/lib/labReviews/consultations'
 import { shortDate, shortDateTime } from '@/lib/labReviews/format'
-import { expirationLabel, orderMedications } from '@/lib/labReviews/medications'
+import {
+  expirationLabel,
+  medicationSummaryLine,
+  orderMedications,
+} from '@/lib/labReviews/medications'
 import type { Medication, Order } from './types'
-
-/** Enough of an order to recognise it. A long one cannot be allowed to push the
- *  labs off the screen, and the rest is in the history dialog. */
-const MAX_ORDER_LINES = 4
 
 /**
  * What the patient is on, what was last sent, and what is next — in the header,
@@ -29,11 +29,10 @@ const MAX_ORDER_LINES = 4
  *
  * These three were tabs in the right rail. A provider reads labs against the
  * current regimen, so making them a click away made the header describe who the
- * patient is while leaving out what is being done about it. Medications are shown
- * in full because a partial list is worse than none: the median patient has two
- * and the busiest in production has nine. Orders and consultations show only the
- * newest, since their history is context rather than something to read every
- * time, and it stays one button away.
+ * patient is while leaving out what is being done about it. Medications collapse
+ * to one line — names, and a weekly dose when it is known — because the full
+ * sigs and expirations are the history, not the glance. Orders and consultations
+ * show only the newest, and every history stays one button away.
  */
 export function PatientSnapshot({
   medications,
@@ -46,6 +45,7 @@ export function PatientSnapshot({
 }) {
   const [showOrders, setShowOrders] = useState(false)
   const [showConsultations, setShowConsultations] = useState(false)
+  const [showMedications, setShowMedications] = useState(false)
 
   // Both lists arrive newest first, so the head of the orders list is the last
   // one sent. Consultations are picked rather than taken, because an upcoming
@@ -55,8 +55,15 @@ export function PatientSnapshot({
 
   return (
     <div className="grid gap-x-6 gap-y-4 border-t px-5 py-4 md:grid-cols-3">
-      <Column label="Medications">
-        <MedicationList medications={medications} />
+      <Column
+        label="Medications"
+        action={
+          medications.length > 0 && (
+            <HistoryButton onClick={() => setShowMedications(true)}>Details</HistoryButton>
+          )
+        }
+      >
+        <MedicationSummary medications={medications} />
       </Column>
 
       <Column
@@ -88,6 +95,16 @@ export function PatientSnapshot({
           <Nothing>No consultations booked.</Nothing>
         )}
       </Column>
+
+      {showMedications && (
+        <HistoryDialog
+          title="Medications"
+          description="Every prescription on this patient's record, with the full instructions and expiration."
+          onClose={() => setShowMedications(false)}
+        >
+          <MedicationHistory medications={medications} />
+        </HistoryDialog>
+      )}
 
       {showOrders && (
         <HistoryDialog
@@ -157,6 +174,15 @@ function Nothing({ children }: { children: React.ReactNode }) {
   return <p className="text-[13px] text-muted-foreground">{children}</p>
 }
 
+function MedicationSummary({ medications }: { medications: Medication[] }) {
+  if (!medications.length) return <Nothing>No medications on record.</Nothing>
+
+  const line = medicationSummaryLine(medications)
+  if (!line) return <Nothing>No active medications.</Nothing>
+
+  return <p className="text-[13px] leading-snug">{line}</p>
+}
+
 /**
  * Every medication, active ones first and testosterone at the top, each with the
  * date it runs out.
@@ -167,35 +193,33 @@ function Nothing({ children }: { children: React.ReactNode }) {
  * supplies the verb; an active one is prefixed with "Expires" so a future date
  * cannot be misread as the day it lapsed.
  */
-function MedicationList({ medications }: { medications: Medication[] }) {
-  if (!medications.length) return <Nothing>No medications on record.</Nothing>
-
-  // `orderMedications` already sorts a copy, so the array above is left alone.
-  // Both sorts are stable and the outer one is applied last, so this reads as:
-  // active before expired, testosterone first within each, and the query's
-  // newest-first order surviving within that.
+function MedicationHistory({ medications }: { medications: Medication[] }) {
   const ordered = orderMedications(medications).sort(
     (a, b) => Number(b.active) - Number(a.active)
   )
 
   return (
-    <ul className="flex flex-col gap-1">
+    <ul className="flex flex-col">
       {ordered.map((med) => {
         const expiration = expirationLabel(med.expiration)
         return (
-          <li
-            key={med.id}
-            className="flex flex-wrap items-baseline gap-x-1.5 text-[13px] leading-snug"
-          >
-            <span className={med.active ? 'font-semibold' : 'text-muted-foreground'}>
-              {med.name}
-            </span>
-            {med.dosage && <span className="text-muted-foreground">{med.dosage}</span>}
-            {!med.active && <Badge variant="secondary">Expired</Badge>}
-            {expiration && (
-              <span className="text-xs text-muted-foreground">
-                {med.active ? `Expires ${expiration}` : expiration}
+          <li key={med.id} className="flex flex-col gap-1 border-b px-5 py-3 last:border-b-0">
+            <div className="flex flex-wrap items-baseline gap-x-1.5">
+              <span className={med.active ? 'text-[13px] font-semibold' : 'text-[13px] text-muted-foreground'}>
+                {med.name}
               </span>
+              {!med.active && <Badge variant="secondary">Expired</Badge>}
+              {expiration && (
+                <span className="text-xs text-muted-foreground">
+                  {med.active ? `Expires ${expiration}` : expiration}
+                </span>
+              )}
+            </div>
+            {med.dosage && (
+              <p className="text-[13px] leading-relaxed text-muted-foreground">{med.dosage}</p>
+            )}
+            {med.pharmacy && (
+              <p className="text-xs text-muted-foreground">{med.pharmacy}</p>
             )}
           </li>
         )
@@ -217,8 +241,7 @@ function orderMeta(order: Order): string {
 }
 
 function LastOrder({ order }: { order: Order }) {
-  const lines = order.contents.slice(0, MAX_ORDER_LINES)
-  const hidden = order.contents.length - lines.length
+  const first = order.contents[0] ?? null
 
   return (
     <div className="flex flex-col gap-1">
@@ -227,24 +250,14 @@ function LastOrder({ order }: { order: Order }) {
         {order.status && <Badge variant="secondary">{order.status}</Badge>}
       </div>
 
-      {lines.length ? (
-        <ul className="flex flex-col gap-0.5">
-          {lines.map((line, i) => (
-            <li key={i} className="text-[13px] leading-snug">
-              {line.name && <span className="font-semibold">{line.name}</span>}
-              {line.name && ' — '}
-              <span className="text-muted-foreground">{line.detail}</span>
-            </li>
-          ))}
-        </ul>
+      {first ? (
+        <p className="text-[13px] leading-snug">
+          {first.name && <span className="font-semibold">{first.name}</span>}
+          {first.name && ' — '}
+          <span className="text-muted-foreground">{first.detail}</span>
+        </p>
       ) : (
         <p className="text-[13px] text-muted-foreground italic">No contents recorded.</p>
-      )}
-
-      {hidden > 0 && (
-        <span className="text-xs text-muted-foreground">
-          +{hidden} more line{hidden === 1 ? '' : 's'}
-        </span>
       )}
     </div>
   )

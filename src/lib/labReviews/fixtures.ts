@@ -11,15 +11,9 @@
  */
 
 /** "More actions" menu.
- *  Blocked on: reading the real flows in the main app. "Generate new protocol"
- *  has no traced implementation at all; "Notify director" has no identified
- *  recipient or delivery mechanism. Both stay inert and labelled rather than
- *  guessing at clinical routing. */
+ *  Blocked on: reading the real flow in the main app. "Notify director" has no
+ *  identified recipient or delivery mechanism, so it stays inert and labelled
+ *  rather than guessing at clinical routing. */
 export const MORE_ACTIONS = [
-  { id: 'generate-protocol', label: 'Generate new protocol', static: true },
   { id: 'notify-director', label: 'Notify director (review note)', static: true },
 ] as const
-
-export const STATIC_NOTICES = {
-  generateProtocol: 'Not wired up yet.',
-} as const
