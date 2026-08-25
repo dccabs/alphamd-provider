@@ -579,7 +579,7 @@ export function planCompletion(
       // quote, and whether one goes out depends on whether it could be priced —
       // which this pure function has no way of knowing. `sendProtocol` sets the
       // status itself, once a quote is actually in the patient's inbox.
-      addFlagIds.push(FLAG.followUpRequired)
+      // Follow Up Required is also not set: the recommendation is the decision.
       break
   }
 

@@ -386,7 +386,7 @@ test('only continue-protocol claims no changes were recommended', () => {
 })
 
 test('dispositions that need downstream work raise the follow-up flag', () => {
-  for (const disposition of ['dose_change', 'follow_up_needed', 'treatment_recommended'] as const) {
+  for (const disposition of ['dose_change', 'follow_up_needed'] as const) {
     const plan = planCompletion(
       draft({ disposition, doseChanges: [testosterone], labOrders: [labs()] }),
       'Dr Smith'
@@ -405,6 +405,13 @@ test('recommending treatment does NOT claim pricing was sent', () => {
   // pricing, and the pricing tool does not live in this app yet.
   const plan = planCompletion(draft({ disposition: 'treatment_recommended' }), 'Dr Smith')
   assert.equal(plan.patientStatusId, null)
+})
+
+test('recommending treatment does not raise the follow-up flag', () => {
+  // The quote and the protocol are the follow-through. A Follow Up Required
+  // flag would sit on the chart after the decision is already made.
+  const plan = planCompletion(draft({ disposition: 'treatment_recommended' }), 'Dr Smith')
+  assert.ok(!plan.addFlagIds.includes(FLAG.followUpRequired))
 })
 
 test('continuing a protocol leaves the patient status alone', () => {
