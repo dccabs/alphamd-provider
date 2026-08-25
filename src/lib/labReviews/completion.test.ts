@@ -240,6 +240,47 @@ test('any one recorded thing is enough of a follow-up', () => {
   }
 })
 
+test('an onboarding follow-up cannot finish with only a new medication', () => {
+  const problems = validateCompletion(
+    draft({
+      disposition: 'follow_up_needed',
+      newMedications: [med({ medicationId: 13, name: 'Anastrozole' })],
+    }),
+    'onboarding'
+  )
+  assert.ok(problems.some((problem) => /cannot also add a medication/i.test(problem)))
+})
+
+test('an onboarding follow-up with labs still refuses a leftover medication', () => {
+  const problems = validateCompletion(
+    draft({
+      disposition: 'follow_up_needed',
+      labOrders: [labs()],
+      newMedications: [med({ medicationId: 13, name: 'Anastrozole' })],
+    }),
+    'onboarding'
+  )
+  assert.equal(problems.length, 1)
+  assert.match(problems[0], /cannot also add a medication/)
+})
+
+test('an onboarding follow-up can finish on labs, a consult, a message, or CS', () => {
+  const each: Partial<ReviewDraft>[] = [
+    { patientMessage: 'We need another draw before deciding.' },
+    { csInstructions: 'Book the redraw.' },
+    { labOrders: [labs()] },
+    { consultation: consult() },
+  ]
+
+  for (const patch of each) {
+    assert.deepEqual(
+      validateCompletion(draft({ disposition: 'follow_up_needed', ...patch }), 'onboarding'),
+      [],
+      JSON.stringify(patch)
+    )
+  }
+})
+
 test('an unnamed medication is not a follow-up on its own', () => {
   const problems = validateCompletion(
     draft({ disposition: 'follow_up_needed', newMedications: [med({ name: '  ', dose: '5 mg' })] })
@@ -369,6 +410,15 @@ test('recommending treatment does NOT claim pricing was sent', () => {
 test('continuing a protocol leaves the patient status alone', () => {
   const plan = planCompletion(draft({ disposition: 'continue_protocol' }), 'Dr Smith')
   assert.equal(plan.patientStatusId, null)
+})
+
+test('a follow-up leaves the patient status alone', () => {
+  const plan = planCompletion(
+    draft({ disposition: 'follow_up_needed', labOrders: [labs()] }),
+    'Dr Smith'
+  )
+  assert.equal(plan.patientStatusId, null)
+  assert.ok(plan.addFlagIds.includes(FLAG.followUpRequired))
 })
 
 test('the note names the provider and the disposition', () => {

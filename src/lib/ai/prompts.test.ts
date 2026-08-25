@@ -93,8 +93,6 @@ describe('systemPromptForField', () => {
   })
 
   it('addresses the patient only in the message written to them', () => {
-    // Second person for the patient here; the provider is still referred to in
-    // the third, which is why this cannot just assert the absence of one phrase.
     assert.match(systemPromptForField('patientMessage'), /Address the patient directly/i)
     assert.match(systemPromptForField('providerNote'), /Do not address the patient/i)
     assert.match(systemPromptForField('csInstructions'), /not to the patient/i)
@@ -144,23 +142,33 @@ describe('systemPromptForField', () => {
     assert.match(prompt, /no name, no title/i)
   })
 
-  it('writes the patient message as the team, for the provider, and by name', () => {
-    // The reader has to know who decided. A message that says "I lowered your
-    // dose" is signed by whoever sends it, which is not the provider.
+  it('writes the patient message in the first person, to the patient by name', () => {
+    // The patient should hear this as coming from their provider, not from
+    // someone else talking about "your provider".
     const prompt = systemPromptForField('patientMessage')
-    assert.match(prompt, /care team/i)
-    assert.match(prompt, /on the provider's behalf/i)
-    assert.match(prompt, /third person/i)
+    assert.match(prompt, /first person/i)
+    assert.match(prompt, /"I reviewed your labs"/)
+    assert.match(prompt, /"we will update your next shipment"/)
     assert.match(prompt, /first name/i)
-    assert.match(prompt, /finished reviewing/i)
+    assert.match(prompt, /reviewed your recent labs/i)
     assert.match(prompt, /What happens next/i)
+    assert.doesNotMatch(prompt, /on the provider's behalf/)
+    assert.doesNotMatch(prompt, /always as "your provider"/)
   })
 
-  it('does not let the patient message give the provider a gender', () => {
-    // It reached for "she" when the brief used it as an example. Nothing in this
-    // request says who the provider is, so a pronoun is an invented fact about a
-    // named clinician, in a message that goes to the patient.
-    assert.match(systemPromptForField('patientMessage'), /never use a pronoun for them/i)
+  it('states eligibility in the present tense', () => {
+    // "You qualified" reads as a closed event. The patient is hearing whether
+    // they qualify now.
+    const prompt = systemPromptForField('patientMessage')
+    assert.match(prompt, /present tense/i)
+    assert.match(prompt, /you qualify for treatment/)
+    assert.doesNotMatch(prompt, /you qualified/)
+  })
+
+  it('never lets the patient message talk about the provider as someone else', () => {
+    const prompt = systemPromptForField('patientMessage')
+    assert.match(prompt, /Never write "your provider"/i)
+    assert.doesNotMatch(prompt, /never use a pronoun for them/)
   })
 
   it('never lets the patient message answer for the provider', () => {

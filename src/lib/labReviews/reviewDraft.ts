@@ -19,13 +19,15 @@ import { parseSkippedSteps, type ReviewStepId } from './reviewSteps.ts'
  * The two disposition sets mirror the two workflows. Which set applies is decided
  * by the patient's status, not by the provider — an onboarding patient cannot
  * have a dose changed because there is no protocol yet, and an active patient is
- * past the point of "treatment recommended".
+ * past the point of "treatment recommended". They share Follow-up needed: more
+ * labs or a consult can be required before either workflow can decide the rest.
  */
 
 /** For a patient who is not yet on treatment. */
 export const ONBOARDING_DISPOSITIONS = [
   'treatment_recommended',
   'treatment_not_recommended',
+  'follow_up_needed',
 ] as const
 
 /** For a patient already on a protocol. */
@@ -35,7 +37,15 @@ export const ACTIVE_DISPOSITIONS = [
   'follow_up_needed',
 ] as const
 
-export const DISPOSITIONS = [...ONBOARDING_DISPOSITIONS, ...ACTIVE_DISPOSITIONS] as const
+/** Every disposition once. The workflow sets share Follow-up needed, so this is
+ *  not a concatenation of the two. */
+export const DISPOSITIONS = [
+  'treatment_recommended',
+  'treatment_not_recommended',
+  'dose_change',
+  'continue_protocol',
+  'follow_up_needed',
+] as const
 
 export type Disposition = (typeof DISPOSITIONS)[number]
 
@@ -57,6 +67,24 @@ export const DISPOSITION_HINTS: Record<Disposition, string> = {
   dose_change: 'Adjust an existing medication',
   continue_protocol: 'No changes; continue as prescribed',
   follow_up_needed: 'More labs, a new medication, or a message for the patient',
+}
+
+export type PatientWorkflow = 'onboarding' | 'member'
+
+export function workflowFor(patientStatus: string | null): PatientWorkflow {
+  return dispositionsFor(patientStatus) === ONBOARDING_DISPOSITIONS ? 'onboarding' : 'member'
+}
+
+/** The hint under a disposition radio. Follow-up needed cannot add a medication
+ *  while the Patient is Onboarding, so that line is not the Member one. */
+export function dispositionHint(
+  disposition: Disposition,
+  patientStatus: string | null
+): string {
+  if (disposition === 'follow_up_needed' && workflowFor(patientStatus) === 'onboarding') {
+    return 'More labs, a consultation, or a message for the patient'
+  }
+  return DISPOSITION_HINTS[disposition]
 }
 
 /**

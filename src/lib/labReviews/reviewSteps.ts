@@ -2,7 +2,7 @@
 // `npm test`, which runs TypeScript through Node's type stripping.
 import { consultLine } from '../consultations/request.ts'
 import { orderLine } from '../labOrders/order.ts'
-import type { ReviewDraft } from './reviewDraft.ts'
+import type { PatientWorkflow, ReviewDraft } from './reviewDraft.ts'
 
 /**
  * The order a review is worked through, and what counts as having dealt with each
@@ -111,21 +111,25 @@ export function hasContent(step: ReviewStepId, draft: ReviewDraft): boolean {
  * panel holding it has to remain reachable, because it is the only place it can be
  * removed.
  */
-export function stepsFor(draft: ReviewDraft): ReviewStepId[] {
+export function stepsFor(
+  draft: ReviewDraft,
+  workflow: PatientWorkflow = 'member'
+): ReviewStepId[] {
   if (draft.disposition === null) return []
 
   return REVIEW_STEPS.filter((step) => {
     if (step === 'doseChanges') {
       return draft.disposition === 'dose_change' || hasContent(step, draft)
     }
-    // Continuing as designed, and declining treatment, are both statements that
-    // nothing is being started.
+    // Continuing as designed, declining treatment, and an Onboarding follow-up
+    // are all statements that nothing is being started. A Member follow-up can
+    // still add a medication; Onboarding has no protocol to add one to.
     if (step === 'newMedications') {
-      return (
-        (draft.disposition !== 'continue_protocol' &&
-          draft.disposition !== 'treatment_not_recommended') ||
-        hasContent(step, draft)
-      )
+      const startingNothing =
+        draft.disposition === 'continue_protocol' ||
+        draft.disposition === 'treatment_not_recommended' ||
+        (workflow === 'onboarding' && draft.disposition === 'follow_up_needed')
+      return !startingNothing || hasContent(step, draft)
     }
     // Declining treatment is a close-out. A consult to explain it is still
     // useful; ordering more labs is not.
@@ -142,8 +146,11 @@ export function isSettled(step: ReviewStepId, draft: ReviewDraft): boolean {
 }
 
 /** The step the provider is on, or null when every applicable step is settled. */
-export function openStep(draft: ReviewDraft): ReviewStepId | null {
-  return stepsFor(draft).find((step) => !isSettled(step, draft)) ?? null
+export function openStep(
+  draft: ReviewDraft,
+  workflow: PatientWorkflow = 'member'
+): ReviewStepId | null {
+  return stepsFor(draft, workflow).find((step) => !isSettled(step, draft)) ?? null
 }
 
 /**
@@ -156,11 +163,12 @@ export function openStep(draft: ReviewDraft): ReviewStepId | null {
  */
 export function pinnedOpenStep(
   draft: ReviewDraft,
-  pin: ReviewStepId | null
+  pin: ReviewStepId | null,
+  workflow: PatientWorkflow = 'member'
 ): ReviewStepId | null {
-  const steps = stepsFor(draft)
+  const steps = stepsFor(draft, workflow)
   if (pin && steps.includes(pin)) return pin
-  return openStep(draft)
+  return openStep(draft, workflow)
 }
 
 /**
@@ -170,8 +178,11 @@ export function pinnedOpenStep(
  * null both at the end and at the very beginning — before a disposition there are
  * no steps to be outstanding.
  */
-export function allSettled(draft: ReviewDraft): boolean {
-  return draft.disposition !== null && openStep(draft) === null
+export function allSettled(
+  draft: ReviewDraft,
+  workflow: PatientWorkflow = 'member'
+): boolean {
+  return draft.disposition !== null && openStep(draft, workflow) === null
 }
 
 /** Adding a skip, without recording it twice. */

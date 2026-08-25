@@ -111,6 +111,21 @@ test('declining treatment does not ask for a new medication', () => {
   assert.ok(stepsFor(draft({ disposition: 'treatment_recommended' })).includes('newMedications'))
 })
 
+test('an onboarding follow-up does not ask for a new medication', () => {
+  assert.ok(
+    !stepsFor(draft({ disposition: 'follow_up_needed' }), 'onboarding').includes('newMedications')
+  )
+  assert.ok(stepsFor(draft({ disposition: 'follow_up_needed' })).includes('newMedications'))
+})
+
+test('a medication left on an onboarding follow-up stays visible so it can be removed', () => {
+  const stranded = draft({
+    disposition: 'follow_up_needed',
+    newMedications: [med({ name: 'Anastrozole', dose: '0.5mg' })],
+  })
+  assert.ok(stepsFor(stranded, 'onboarding').includes('newMedications'))
+})
+
 // This is the case that makes the review recoverable: `validateCompletion` refuses
 // to finish with a dose change recorded under another disposition, so the panel
 // holding it has to stay on screen to be emptied.

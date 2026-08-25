@@ -9,7 +9,12 @@ import {
 } from '../consultations/request.ts'
 import { orderLine, orderWhen, validateOrder, type LabOrder } from '../labOrders/order.ts'
 import { FLAG, PATIENT_STATUS } from './clinicalIds.ts'
-import { DISPOSITION_LABELS, type Disposition, type ReviewDraft } from './reviewDraft.ts'
+import {
+  DISPOSITION_LABELS,
+  type Disposition,
+  type PatientWorkflow,
+  type ReviewDraft,
+} from './reviewDraft.ts'
 
 /**
  * What finishing a lab review means, decided as a pure function.
@@ -125,7 +130,10 @@ export type CompletionPlan = {
  * good decision. A dose change with no medication named, or a follow-up with
  * nothing to follow up on, is a record nobody can act on later.
  */
-export function validateCompletion(draft: ReviewDraft): string[] {
+export function validateCompletion(
+  draft: ReviewDraft,
+  workflow: PatientWorkflow = 'member'
+): string[] {
   const problems: string[] = []
 
   if (!draft.disposition) {
@@ -163,6 +171,19 @@ export function validateCompletion(draft: ReviewDraft): string[] {
     )
   }
 
+  // Onboarding Follow-up needed is "we are not deciding treatment yet". A new
+  // medication is a treatment decision, and Treatment recommended is the path
+  // that quotes it.
+  if (
+    workflow === 'onboarding' &&
+    draft.disposition === 'follow_up_needed' &&
+    namedMedications(draft).length > 0
+  ) {
+    problems.push(
+      'Follow-up needed cannot also add a medication while the Patient is Onboarding. Remove it, or choose Treatment recommended.'
+    )
+  }
+
   if (draft.disposition === 'treatment_not_recommended' && draft.labOrders.length > 0) {
     problems.push(
       'Treatment not recommended cannot also order labs. Remove them, or choose another disposition.'
@@ -173,9 +194,11 @@ export function validateCompletion(draft: ReviewDraft): string[] {
   // used to be checked against a group of checkboxes that declared what the
   // follow-up needed; the declaration could disagree with what was actually
   // recorded, so it is now checked against the recorded things themselves.
-  if (draft.disposition === 'follow_up_needed' && !followUpArtifacts(draft)) {
+  if (draft.disposition === 'follow_up_needed' && !followUpArtifacts(draft, workflow)) {
     problems.push(
-      'Say what the follow-up is: a message for the patient, instructions for customer service, a lab order, a consultation, or a new medication.'
+      workflow === 'onboarding'
+        ? 'Say what the follow-up is: a message for the patient, instructions for customer service, a lab order, or a consultation.'
+        : 'Say what the follow-up is: a message for the patient, instructions for customer service, a lab order, a consultation, or a new medication.'
     )
   }
 
@@ -207,13 +230,16 @@ export function validateCompletion(draft: ReviewDraft): string[] {
 
 /** Whether anything was recorded that a follow-up could consist of. Asking the
  *  patient in to be seen counts: that is the follow-up, not a note about one. */
-function followUpArtifacts(draft: ReviewDraft): boolean {
+function followUpArtifacts(
+  draft: ReviewDraft,
+  workflow: PatientWorkflow = 'member'
+): boolean {
   return Boolean(
     draft.patientMessage.trim() ||
       draft.csInstructions.trim() ||
       draft.labOrders.length ||
       draft.consultation ||
-      namedMedications(draft).length
+      (workflow === 'member' && namedMedications(draft).length)
   )
 }
 

@@ -28,7 +28,8 @@ import {
   validateEscalation,
   type Escalation,
 } from './needsAttention'
-import { DISPOSITION_LABELS, type ReviewDraft } from './reviewDraft'
+import { getPatientHeader } from './queries'
+import { DISPOSITION_LABELS, workflowFor, type ReviewDraft } from './reviewDraft'
 
 /**
  * Every write this portal makes to a lab review.
@@ -331,9 +332,6 @@ export async function completeLabReview(
   reviewId: string,
   draft: ReviewDraft
 ): Promise<MutationResult> {
-  const problems = validateCompletion(draft)
-  if (problems.length) return { ok: false, error: problems.join(' ') }
-
   const review = await loadForMutation(reviewId)
   if (!review) return { ok: false, error: 'This review no longer exists.' }
 
@@ -344,6 +342,10 @@ export async function completeLabReview(
     const holder = await nameOf(review.assignedTo)
     return { ok: false, error: `${holder} holds this review. It cannot be finished from here.` }
   }
+
+  const header = await getPatientHeader(review.patientId)
+  const problems = validateCompletion(draft, workflowFor(header?.status ?? null))
+  if (problems.length) return { ok: false, error: problems.join(' ') }
 
   // Priced before anything is written, for two reasons: the preflight below needs
   // to know whether a quote is going out, and the note written further down has to
@@ -452,9 +454,6 @@ export async function closeLabReview(
   reviewId: string,
   draft: ReviewDraft
 ): Promise<MutationResult> {
-  const problems = validateCompletion(draft)
-  if (problems.length) return { ok: false, error: problems.join(' ') }
-
   const review = await loadForMutation(reviewId)
   if (!review) return { ok: false, error: 'This review no longer exists.' }
 
@@ -465,6 +464,10 @@ export async function closeLabReview(
     const holder = await nameOf(review.assignedTo)
     return { ok: false, error: `${holder} holds this review. It cannot be finished from here.` }
   }
+
+  const header = await getPatientHeader(review.patientId)
+  const problems = validateCompletion(draft, workflowFor(header?.status ?? null))
+  if (problems.length) return { ok: false, error: problems.join(' ') }
 
   const admin = createAdminClient()
   const actor = await resolveActor(access)

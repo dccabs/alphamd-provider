@@ -17,10 +17,11 @@ import { validateCompletion } from '@/lib/labReviews/completion'
 import type { Consultation } from '@/lib/labReviews/consultations'
 import { shortTime } from '@/lib/labReviews/format'
 import {
-  DISPOSITION_HINTS,
   DISPOSITION_LABELS,
+  dispositionHint,
   dispositionsFor,
   isDraftEmpty,
+  workflowFor,
   type Disposition,
   type ReviewDraft,
 } from '@/lib/labReviews/reviewDraft'
@@ -178,7 +179,9 @@ export function ReviewModal({
    * Held here rather than in the draft because it is a cursor, not a decision:
    * where somebody is looking is not worth a round trip.
    */
-  const [pin, setPin] = useState<ReviewStepId | null>(() => openStep(initialDraft))
+  const [pin, setPin] = useState<ReviewStepId | null>(() =>
+    openStep(initialDraft, workflowFor(patientStatus))
+  )
 
   // The debounce timer and the close handler both need whatever the newest draft
   // is at the moment they run, not the one captured when they were created.
@@ -234,15 +237,16 @@ export function ReviewModal({
   /** The same checks the server runs. Duplicated deliberately: this disables the
    *  button and names what is missing, while the server's copy is the one that
    *  actually protects the chart. */
-  const problems = validateCompletion(draft)
+  const workflow = workflowFor(patientStatus)
+  const problems = validateCompletion(draft, workflow)
 
   const options = dispositionsFor(patientStatus)
   const continuing = draft.disposition === 'continue_protocol'
   const declining = draft.disposition === 'treatment_not_recommended'
 
-  const steps = stepsFor(draft)
-  const current = pinnedOpenStep(draft, pin)
-  const settled = allSettled(draft)
+  const steps = stepsFor(draft, workflow)
+  const current = pinnedOpenStep(draft, pin, workflow)
+  const settled = allSettled(draft, workflow)
 
   const stateOf = (step: ReviewStepId): 'hidden' | 'open' | 'settled' => {
     if (!steps.includes(step)) return 'hidden'
@@ -265,7 +269,7 @@ export function ReviewModal({
     const at = latest.current
     const skippedSteps = hasContent(step, at) ? withoutSkip(at, step) : withSkip(at, step)
     update({ skippedSteps })
-    setPin(openStep({ ...at, skippedSteps }))
+    setPin(openStep({ ...at, skippedSteps }, workflow))
   }
 
   /** The plain props every step shares, so the seven call sites below stay
@@ -345,10 +349,11 @@ export function ReviewModal({
                 <DispositionOption
                   key={option}
                   option={option}
+                  hint={dispositionHint(option, patientStatus)}
                   selected={draft.disposition === option}
                   onSelect={() => {
                     update({ disposition: option })
-                    setPin(openStep({ ...latest.current, disposition: option }))
+                    setPin(openStep({ ...latest.current, disposition: option }, workflow))
                   }}
                 />
               ))}
@@ -567,10 +572,12 @@ export function ReviewModal({
 
 function DispositionOption({
   option,
+  hint,
   selected,
   onSelect,
 }: {
   option: Disposition
+  hint: string
   selected: boolean
   onSelect: () => void
 }) {
@@ -591,7 +598,7 @@ function DispositionOption({
       />
       <span>
         <span className="block text-[13px] font-semibold">{DISPOSITION_LABELS[option]}</span>
-        <span className="block text-xs text-muted-foreground">{DISPOSITION_HINTS[option]}</span>
+        <span className="block text-xs text-muted-foreground">{hint}</span>
       </span>
     </label>
   )

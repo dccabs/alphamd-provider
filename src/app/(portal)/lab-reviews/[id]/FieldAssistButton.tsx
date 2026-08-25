@@ -27,7 +27,7 @@ import {
  *
  * The provider says what the field should say — usually in shorthand, the way
  * they would say it out loud — and the assistant writes it in the register that
- * field needs: third person for the chart, second person for the patient, plain
+ * field needs: third person for the chart, first person to the patient, plain
  * tasks for customer service.
  *
  * Four decisions carry the whole thing:

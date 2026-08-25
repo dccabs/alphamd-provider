@@ -9,10 +9,12 @@ import {
   DISPOSITION_LABELS,
   EMPTY_DRAFT,
   ONBOARDING_DISPOSITIONS,
+  dispositionHint,
   dispositionsFor,
   isDisposition,
   isDraftEmpty,
   parseDraft,
+  workflowFor,
 } from './reviewDraft.ts'
 
 test('a null or non-object draft column reads as empty', () => {
@@ -416,9 +418,35 @@ test('every disposition has a label and hint', () => {
   }
 })
 
-test('the two disposition sets do not overlap', () => {
-  const onboarding = new Set<string>(ONBOARDING_DISPOSITIONS)
-  assert.ok(ACTIVE_DISPOSITIONS.every((d) => !onboarding.has(d)))
+test('onboarding offers follow-up needed after the two treatment decisions', () => {
+  assert.deepEqual(ONBOARDING_DISPOSITIONS, [
+    'treatment_recommended',
+    'treatment_not_recommended',
+    'follow_up_needed',
+  ])
+})
+
+test('the two disposition sets share only follow-up needed', () => {
+  const shared = ONBOARDING_DISPOSITIONS.filter((d) =>
+    (ACTIVE_DISPOSITIONS as readonly string[]).includes(d)
+  )
+  assert.deepEqual(shared, ['follow_up_needed'])
+})
+
+test('an onboarding follow-up does not mention adding a medication', () => {
+  assert.equal(
+    dispositionHint('follow_up_needed', 'Non-Patient - Test Results Received - Awaiting Review'),
+    'More labs, a consultation, or a message for the patient'
+  )
+  assert.equal(
+    dispositionHint('follow_up_needed', 'Patient, Active Subscription'),
+    'More labs, a new medication, or a message for the patient'
+  )
+})
+
+test('a missing status is onboarding, the safer default', () => {
+  assert.equal(workflowFor(null), 'onboarding')
+  assert.equal(workflowFor('Patient, Active Subscription'), 'member')
 })
 
 test('every disposition in either set is a recognised disposition', () => {
