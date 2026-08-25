@@ -302,7 +302,6 @@ marked in the UI. **An unlabelled static region is a bug.**
 
 | What | Why | What unblocks it |
 | --- | --- | --- |
-| "Notify director (review note)" | No traced implementation, and no identified recipient or delivery mechanism | Reading the real flow before wiring it. Labelled "Not wired" rather than guessing at clinical routing. |
 | Up/down arrows on the AI chips | The extracted JSON stores display strings with no reference interval and no H/L flag, and there is no reference-range table anywhere in the database | Extending the extraction prompt to capture the range the lab report already prints. Chips ship without arrows rather than hardcoding clinical thresholds in front-end code. |
 | Billing tab | Dropped from this iteration | Next iteration: `transactions_v4` plus an unpaid-balance flag. Note `collection_status` is the dunning state, not the payment state — 8,280 paid invoices read `pending`. |
 

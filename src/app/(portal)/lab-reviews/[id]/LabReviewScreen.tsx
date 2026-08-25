@@ -12,7 +12,6 @@ import type { LabProviderOption, ScheduledLabOrder } from '@/lib/labOrders/queri
 import type { Analyte } from '@/lib/labReviews/analytes'
 import type { Consultation } from '@/lib/labReviews/consultations'
 import { shortDate, shortDateTime } from '@/lib/labReviews/format'
-import { MORE_ACTIONS } from '@/lib/labReviews/fixtures'
 import type { Escalation } from '@/lib/labReviews/needsAttention'
 import type { Note } from '@/lib/labReviews/notes'
 import type { ReviewDraft } from '@/lib/labReviews/reviewDraft'
@@ -383,15 +382,6 @@ export function LabReviewScreen({
                     <TriangleAlert className="size-3.5" />
                     Mark needs attention
                   </button>
-                  {MORE_ACTIONS.map((action) => (
-                    <span
-                      key={action.id}
-                      className="flex items-center justify-between gap-2 rounded-md px-2.5 py-2 text-[13px] text-muted-foreground"
-                    >
-                      {action.label}
-                      <Badge variant="secondary">Not wired</Badge>
-                    </span>
-                  ))}
                 </div>
               )}
 
