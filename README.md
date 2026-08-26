@@ -152,17 +152,20 @@ and being wrong means a flag on a chart that says something untrue.
 
 ### Needs attention
 
-Escalation routes to customer service, another provider, or both at once. The rule
-worth knowing: **customer service never owns a lab review.** Escalating to CS
-creates an `actions` row, points `lab_reviews.cs_action_id` at it, and flags the
-patient — but leaves `assigned_to` alone, because CS cannot make the clinical
-decision that closes the review. Only the provider route moves the review.
+A provider can park a review with a note and involve nobody else — the review
+stays theirs, no CS task, no patient flag. They can also route to customer
+service, another provider, or both at once.
 
-Every escalation also records a `lab_review_notes` row. That is the second note
-type: notes *about the review* rather than about the patient. A handoff reason
+The rule worth knowing: **customer service never owns a lab review.** Escalating
+to CS creates an `actions` row, points `lab_reviews.cs_action_id` at it, and
+flags the patient — but leaves `assigned_to` alone, because CS cannot make the
+clinical decision that closes the review. Only the provider route moves the
+review.
+
+Every park also records a `lab_review_notes` row. That is the second note type:
+notes *about the review* rather than about the patient. A park or handoff reason
 belongs there and not in `patient_notes_private`, which is the clinical chart —
-"escalating because I want a second opinion on the Hct trend" is workflow, not
-medical record.
+"coming back after I check last month's Hct" is workflow, not medical record.
 
 ### Ordering labs
 

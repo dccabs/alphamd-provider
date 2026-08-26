@@ -8,6 +8,7 @@ import {
   ESCALATION_TARGET_LABELS,
   isEscalationTarget,
   parseTargets,
+  summarizeNeedsAttention,
   transfersOwnership,
   validateEscalation,
   type Escalation,
@@ -32,9 +33,13 @@ test('a target list from the browser is filtered and deduplicated', () => {
   assert.deepEqual(parseTargets(null), [])
 })
 
-test('an empty escalation names every missing piece at once', () => {
+test('a note is the only thing a park requires', () => {
   const problems = validateEscalation(escalation())
-  assert.deepEqual(problems, ['Choose who this needs to go to.', 'Say why this needs attention.'])
+  assert.deepEqual(problems, ['Say why this needs attention.'])
+})
+
+test('a note with no targets parks the review without involving anyone', () => {
+  assert.deepEqual(validateEscalation(escalation({ note: 'Come back after I check last month\'s Hct' })), [])
 })
 
 test('a note of whitespace is not a note', () => {
@@ -78,8 +83,38 @@ test('both targets at once is allowed', () => {
   )
 })
 
+test('parking for yourself does not transfer ownership', () => {
+  assert.equal(transfersOwnership(escalation({ note: 'Come back later' })), false)
+})
+
 test('customer service does not take ownership of a review', () => {
   assert.equal(transfersOwnership(escalation({ targets: ['customer_service'] })), false)
+})
+
+test('a self-park is recorded as needing attention, not as an escalation', () => {
+  assert.equal(
+    summarizeNeedsAttention({ actorName: 'Dan', targets: [], handedToName: null }),
+    'Dan marked this as needing attention'
+  )
+})
+
+test('an escalation names who was involved', () => {
+  assert.equal(
+    summarizeNeedsAttention({
+      actorName: 'Dan',
+      targets: ['customer_service'],
+      handedToName: null,
+    }),
+    'Dan escalated to Customer service'
+  )
+  assert.equal(
+    summarizeNeedsAttention({
+      actorName: 'Dan',
+      targets: ['provider'],
+      handedToName: 'Sam',
+    }),
+    'Dan escalated to Another provider, handing the review to Sam'
+  )
 })
 
 test('the provider route does take ownership', () => {

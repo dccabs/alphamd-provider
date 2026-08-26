@@ -267,4 +267,10 @@ describe('describeEscalation', () => {
     const described = describeEscalation({ ...EMPTY_ESCALATION, targets: ['provider'] })
     assert.doesNotMatch(described, /not a clinician/)
   })
+
+  it('frames a self-park as a reminder to the same provider', () => {
+    const described = describeEscalation(EMPTY_ESCALATION)
+    assert.match(described, /parking this review for themselves/)
+    assert.doesNotMatch(described, /handed to/)
+  })
 })

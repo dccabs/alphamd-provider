@@ -20,6 +20,14 @@ _Avoid_: Case, ticket, task
 The clinical decision recorded when a Lab Review is finished. Which options are offered depends on whether the Patient is still Onboarding or is already a Member.
 _Avoid_: Resolution, outcome, status (status is the queue column)
 
+**Needs attention**:
+A Lab Review parked before a Disposition is recorded. It stays with the assigned Provider unless they handed it to another Provider.
+_Avoid_: Escalated (that means someone else has work), on hold, flagged
+
+**Handoff**:
+Giving a Lab Review to another Provider. Customer service never receives one.
+_Avoid_: Assign (changing who holds it without parking)
+
 **Onboarding**:
 A Patient who does not yet have a subscription. Database status labels say "Non-Patient".
 _Avoid_: Non-patient, lead, prospect

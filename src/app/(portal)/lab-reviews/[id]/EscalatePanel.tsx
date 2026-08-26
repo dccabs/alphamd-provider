@@ -10,6 +10,7 @@ import {
   ESCALATION_TARGETS,
   ESCALATION_TARGET_HINTS,
   ESCALATION_TARGET_LABELS,
+  SELF_PARK_HINT,
   transfersOwnership,
   validateEscalation,
   type Escalation,
@@ -20,11 +21,12 @@ import { AssistButton } from './AssistButton'
 import type { ProviderOption } from './types'
 
 /**
- * The Needs Attention escalation menu.
+ * The Needs Attention menu.
  *
- * Both targets can be picked at once — "CS needs to book a redraw *and* I want
- * another provider to look at this" is a real situation, and forcing a choice
- * would mean doing it twice.
+ * Targets are optional. Leaving both unchecked parks the review for the
+ * assigned provider — a note, no CS task, no handoff. Both targets can still
+ * be picked at once: "CS needs to book a redraw *and* I want another provider
+ * to look at this" is a real situation.
  *
  * The hint under "Customer service" says the review stays yours, because that is
  * the surprising part: escalating to CS looks like handing the work away, and it
@@ -91,6 +93,7 @@ export function EscalatePanel({
           </label>
         ))}
       </div>
+      <p className="text-xs text-muted-foreground">{SELF_PARK_HINT}</p>
 
       {transfersOwnership(escalation) && (
         <div className="flex flex-col gap-1">
@@ -121,17 +124,17 @@ export function EscalatePanel({
 
       <div className="flex flex-col gap-1">
         <Label htmlFor="escalate-note" className="text-xs text-muted-foreground">
-          Why? Whoever picks this up sees this note.
+          Why?
         </Label>
         <DictationTextarea
           id="escalate-note"
           rows={3}
           value={escalation.note}
           onValueChange={(note) => setEscalation((prev) => ({ ...prev, note }))}
-          placeholder="Waiting on a repeat draw, need a second opinion on the Hct trend…"
+          placeholder="Come back after I check last month's Hct…"
         />
-        {/* Told who the note is for, because a note to customer service and a note
-            to another provider are not the same note. */}
+        {/* describeEscalation says who the note is for — yourself, CS, or
+            another provider — because those are not the same note. */}
         <AssistButton
           reviewId={reviewId}
           task="handoff_note"
@@ -152,7 +155,7 @@ export function EscalatePanel({
           title={problems.length ? problems.join(' ') : undefined}
           onClick={() => onSubmit(escalation)}
         >
-          {pending ? 'Escalating…' : 'Mark needs attention'}
+          {pending ? 'Parking…' : 'Mark needs attention'}
         </Button>
       </div>
     </div>

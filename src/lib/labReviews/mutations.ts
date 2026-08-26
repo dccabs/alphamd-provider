@@ -23,7 +23,7 @@ import {
 } from './completion'
 import { logLabReviewEvent, resolveActor, type Actor } from './events'
 import {
-  ESCALATION_TARGET_LABELS,
+  summarizeNeedsAttention,
   transfersOwnership,
   validateEscalation,
   type Escalation,
@@ -723,14 +723,17 @@ async function applySideEffects(
 }
 
 /**
- * Park a review as needing attention, routed to customer service, another
- * provider, or both.
+ * Park a review as needing attention, for the assigned provider, customer
+ * service, another provider, or a combination.
  *
  * Ordering, and why: the review row moves to `needs_attention` first, then the
  * routing side effects run. Same reasoning as completion — no transaction spans
  * these tables, so the review row is the one place that records the whole
  * intent, and a failed side effect is reported rather than pretending the
- * escalation did not happen.
+ * park did not happen.
+ *
+ * **No targets is a self-park.** The review stays assigned (or is claimed if it
+ * was unassigned). No CS task, no patient flag.
  *
  * **Customer service does not take the review.** `assigned_to` is left alone on
  * the CS route, per the doc: CS cannot make the clinical decision that closes a
@@ -769,16 +772,16 @@ export async function escalateLabReview(
       needs_attention_at: now,
       needs_attention_by: access.userId,
       needs_attention_targets: escalation.targets,
-      // Unassigned reviews get claimed by whoever escalated, so a parked review
-      // always names somebody clinical. The CS route deliberately does not move
-      // an existing assignment.
+      // Unassigned reviews get claimed by whoever parked them, so a parked
+      // review always names somebody clinical. Self-park and the CS route
+      // deliberately do not move an existing assignment.
       assigned_to: handingTo ?? review.assignedTo ?? access.userId,
       updated_at: now,
     })
     .eq('id', reviewId)
     .neq('status', 'finished')
     .select('id')
-  if (error) return { ok: false, error: `Could not escalate this review: ${error.message}` }
+  if (error) return { ok: false, error: `Could not park this review: ${error.message}` }
   if (!updated?.length) {
     return { ok: false, error: 'This review was finished by somebody else. Reload the page.' }
   }
@@ -800,16 +803,17 @@ export async function escalateLabReview(
     warnings.push(...(await routeToCustomerService(access, review, note, actor.displayName)))
   }
 
-  const targetNames = escalation.targets.map((t) => ESCALATION_TARGET_LABELS[t]).join(' and ')
   const handedToName = handingTo ? await nameOf(handingTo) : null
 
   const logged = await logLabReviewEvent({
     labReviewId: reviewId,
     eventType: 'needs_attention_requested',
     actor,
-    summary: handedToName
-      ? `${actor.displayName} escalated to ${targetNames}, handing the review to ${handedToName}`
-      : `${actor.displayName} escalated to ${targetNames}`,
+    summary: summarizeNeedsAttention({
+      actorName: actor.displayName,
+      targets: escalation.targets,
+      handedToName,
+    }),
     fromStatus: review.status,
     toStatus: 'needs_attention',
     metadata: { targets: escalation.targets, handedTo: handingTo, note },
@@ -819,7 +823,7 @@ export async function escalateLabReview(
   if (warnings.length) {
     return {
       ok: true,
-      warning: `Escalated, but ${warnings.join('; ')}. Tell an administrator.`,
+      warning: `Parked, but ${warnings.join('; ')}. Tell an administrator.`,
     }
   }
   return { ok: true }

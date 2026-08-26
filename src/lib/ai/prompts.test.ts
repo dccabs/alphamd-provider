@@ -16,6 +16,12 @@ describe('systemPromptFor', () => {
     assert.match(systemPromptFor('handoff_note'), /stated first/i)
   })
 
+  it('lets the note be a reminder to the same provider, not only a handoff', () => {
+    const prompt = systemPromptFor('handoff_note')
+    assert.match(prompt, /same provider/)
+    assert.match(prompt, /parking/)
+  })
+
   it('signs a support reply as AlphaMD Support and defers clinically', () => {
     const prompt = systemPromptFor('cs_reply', 'support')
     assert.match(prompt, /AlphaMD Support/)

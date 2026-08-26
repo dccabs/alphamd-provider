@@ -113,17 +113,23 @@ export function describeDecision(
   return lines.join('\n')
 }
 
-/** The same idea for an escalation: who it is going to, and why. */
+/** Who the needs-attention note is for, so the draft is a reminder, a note for
+ *  customer service, or a Handoff — not the wrong one of those. */
 export function describeEscalation(escalation: Escalation): string {
   const lines: string[] = []
 
-  if (escalation.targets.length) {
+  if (escalation.targets.length === 0) {
     lines.push(
-      `This is being handed to: ${escalation.targets
-        .map((t) => ESCALATION_TARGET_LABELS[t])
-        .join(' and ')}.`
+      'The provider is parking this review for themselves. Write a short reminder of why they are coming back.'
     )
+    return lines.join('\n')
   }
+
+  lines.push(
+    `This is being handed to: ${escalation.targets
+      .map((t) => ESCALATION_TARGET_LABELS[t])
+      .join(' and ')}.`
+  )
 
   if (escalation.targets.includes('customer_service')) {
     lines.push(

@@ -25,7 +25,7 @@ export function isAiTask(value: unknown): value is AiTask {
 }
 
 export const AI_TASK_LABELS: Record<AiTask, string> = {
-  handoff_note: 'Draft the handoff note',
+  handoff_note: 'Draft the note',
   cs_reply: 'Draft a reply',
 }
 
