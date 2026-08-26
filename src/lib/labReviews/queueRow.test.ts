@@ -81,13 +81,30 @@ test('a review opened but not written in reports when it was started', () => {
   )
 })
 
-test('a finished review reports when it was finished, not who holds it', () => {
+test('a finished review names who finished it', () => {
+  // `assigned_to` is stamped with the provider who closed the review, so the
+  // name already on the row is the finisher, not a current holder.
   const meta = queueRowMeta(
     row({
       status: 'finished',
       assignedToName: 'Jonathan Meyer',
       startedAt: '2026-08-13T08:00:00Z',
       draftUpdatedAt: '2026-08-13T09:00:00Z',
+      reviewedAt: '2026-08-13T10:00:00Z',
+    }),
+    NOW
+  )
+  assert.deepEqual(meta, [
+    'Fax',
+    'arrived 2d ago (08/12/26)',
+    'finished by Jonathan Meyer 1d ago',
+  ])
+})
+
+test('a finished review without a recorded finisher still says when', () => {
+  const meta = queueRowMeta(
+    row({
+      status: 'finished',
       reviewedAt: '2026-08-13T10:00:00Z',
     }),
     NOW

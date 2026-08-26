@@ -66,8 +66,9 @@ export function sourceLabel(sourceKinds: string[]): string | null {
 /**
  * The row's second line, as segments a caller joins with a separator.
  *
- * Order is arrival, then who holds it, then how fresh the work is — oldest fact
- * to newest, which is also least to most useful when deciding what to pick up.
+ * Order is arrival, then who holds it (or who finished it), then how fresh the
+ * work is — oldest fact to newest, which is also least to most useful when
+ * deciding what to pick up.
  * `now` is injectable so this is testable without freezing the clock.
  */
 export function queueRowMeta(
@@ -95,7 +96,9 @@ export function queueRowMeta(
   const progress = progressOf(review)
 
   if (progress === 'finished') {
-    segments.push(review.reviewedAt ? `finished ${relativeAge(review.reviewedAt, now)}` : 'finished')
+    const when = review.reviewedAt ? relativeAge(review.reviewedAt, now) : null
+    const by = review.assignedToName ? `by ${review.assignedToName}` : null
+    segments.push(['finished', by, when].filter(Boolean).join(' '))
     return segments.filter(Boolean) as string[]
   }
 
