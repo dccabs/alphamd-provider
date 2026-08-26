@@ -188,6 +188,27 @@ export type ReviewDraft = {
    * which is why it belongs in the draft alongside the decisions it sits between.
    */
   skippedSteps: ReviewStepId[]
+  /**
+   * Catalog Discount ids the Provider has chosen for this quote.
+   *
+   * Stale ids stay here if they change the Subscription — Finalize says which
+   * were used and which were not. Pricing ignores any that the product cannot
+   * take.
+   */
+  selectedDiscountIds: number[]
+  /**
+   * The Coupon code to put on the quote, or null for none.
+   *
+   * Distinct from the Patient's assigned Coupon: they may have taken it off.
+   * An expired assigned Coupon is only written here if they check it on.
+   */
+  couponCode: string | null
+  /**
+   * True once Newsletter / the assigned live Coupon have been written onto this
+   * draft. Stops a cleared selection being put back the next time the flyout
+   * opens.
+   */
+  discountsSeeded: boolean
 }
 
 export const EMPTY_DRAFT: ReviewDraft = {
@@ -201,6 +222,9 @@ export const EMPTY_DRAFT: ReviewDraft = {
   providerNote: '',
   chartSummary: '',
   skippedSteps: [],
+  selectedDiscountIds: [],
+  couponCode: null,
+  discountsSeeded: false,
 }
 
 function str(value: unknown): string {
@@ -308,7 +332,24 @@ export function parseDraft(json: unknown): ReviewDraft {
     // right way: whatever it already holds reads as settled, and anything empty is
     // asked about once, rather than a half-written review finishing on silence.
     skippedSteps: parseSkippedSteps(raw.skippedSteps),
+    selectedDiscountIds: ids(raw.selectedDiscountIds),
+    couponCode: str(raw.couponCode).trim() || null,
+    discountsSeeded: raw.discountsSeeded === true,
   }
+}
+
+/** Positive integer ids, in order, uniques kept. Junk dropped. */
+function ids(value: unknown): number[] {
+  if (!Array.isArray(value)) return []
+  const seen = new Set<number>()
+  const out: number[] = []
+  for (const item of value) {
+    const id = rowId(item)
+    if (id === null || seen.has(id)) continue
+    seen.add(id)
+    out.push(id)
+  }
+  return out
 }
 
 /**

@@ -160,6 +160,24 @@ test('declining treatment offers a consult and not labs', () => {
   assert.ok(steps.includes('consultation'))
 })
 
+test('discounts sit after new medications and only when there is a subscription', () => {
+  const recommended = draft({ disposition: 'treatment_recommended' })
+  assert.ok(!stepsFor(recommended).includes('discounts'))
+  assert.ok(stepsFor(recommended, 'onboarding', { hasQuotedSubscription: true }).includes('discounts'))
+
+  const steps = stepsFor(recommended, 'onboarding', { hasQuotedSubscription: true })
+  assert.ok(steps.indexOf('newMedications') < steps.indexOf('discounts'))
+  assert.ok(steps.indexOf('discounts') < steps.indexOf('labOrders'))
+})
+
+test('a leftover discount selection stays visible when the subscription is gone', () => {
+  const leftover = draft({
+    disposition: 'treatment_recommended',
+    selectedDiscountIds: [6],
+  })
+  assert.ok(stepsFor(leftover).includes('discounts'))
+})
+
 // --- content and settling ---------------------------------------------------
 
 test('nothing has content in an empty draft', () => {
@@ -184,6 +202,8 @@ test('each step reads its own part of the draft', () => {
   assert.ok(hasContent('providerNote', draft({ providerNote: 'Reviewed.' })))
   assert.ok(hasContent('csInstructions', draft({ csInstructions: 'Ship it.' })))
   assert.ok(hasContent('patientMessage', draft({ patientMessage: 'Hi Dan,' })))
+  assert.ok(hasContent('discounts', draft({ selectedDiscountIds: [6] })))
+  assert.ok(hasContent('discounts', draft({ couponCode: 'SWITCH2026' })))
 })
 
 test('a step is settled by content or by a recorded skip', () => {
@@ -312,6 +332,13 @@ test('a new medication summarises as its name and dose', () => {
       draft({ newMedications: [med({ name: 'Anastrozole', dose: '0.5mg twice weekly' })] })
     ),
     'Anastrozole — 0.5mg twice weekly'
+  )
+})
+
+test('discounts summarise as the catalog count and the coupon code', () => {
+  assert.equal(
+    stepSummary('discounts', draft({ selectedDiscountIds: [1, 6], couponCode: 'SWITCH2026' })),
+    '2 catalog discounts; Coupon SWITCH2026'
   )
 })
 

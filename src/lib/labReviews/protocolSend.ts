@@ -4,7 +4,8 @@ import type { ProviderAccess } from '@/lib/authz'
 import { handoffLines, planProtocolFor, sendProtocol } from '@/lib/protocols/mutations'
 import { createAdminClient } from '@/lib/supabase/admin'
 
-import type { DraftMedication } from './reviewDraft'
+import { draftPricing } from './discountSeed'
+import type { ReviewDraft } from './reviewDraft'
 
 export type ProtocolSendFromReview =
   | { status: 'skipped' }
@@ -23,7 +24,7 @@ export type ProtocolSendFromReview =
 export async function sendLabReviewProtocol(
   access: ProviderAccess,
   reviewId: string,
-  medications: DraftMedication[]
+  draft: ReviewDraft
 ): Promise<ProtocolSendFromReview> {
   const admin = createAdminClient()
 
@@ -38,13 +39,13 @@ export async function sendLabReviewProtocol(
   if (!review) return { status: 'error', message: 'This review no longer exists.' }
 
   try {
-    const plan = await planProtocolFor(medications)
+    const plan = await planProtocolFor(draft.newMedications, draftPricing(draft))
     const result = await sendProtocol(
       access,
       reviewId,
       review.patient_id as string,
       plan,
-      medications
+      draft.newMedications
     )
 
     switch (result.kind) {

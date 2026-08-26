@@ -10,7 +10,7 @@ import { sendPauboxEmail } from '@/lib/paubox'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { pricingBreakdown } from './breakdown'
 import { requireConsents, sendConsentEmail } from './consents'
-import { loadPricingCatalog } from './loadCatalog'
+import { loadCouponByCode, loadPricingCatalog } from './loadCatalog'
 import { formatUsd, type Cents } from './money'
 import { PROTOCOL_FROM, protocolEmail } from './protocolEmail'
 import { renderProtocolEmailHtml } from './protocolEmailHtml'
@@ -97,10 +97,21 @@ async function subjectFor(patientId: string): Promise<Subject> {
  * with each other across a catalog edit, which would put one price on the chart
  * and a different one in the patient's inbox.
  */
-export async function planProtocolFor(medications: DraftMedication[]): Promise<ProtocolPlan> {
+export async function planProtocolFor(
+  medications: DraftMedication[],
+  pricing: { selectedDiscountIds?: number[]; couponCode?: string | null } = {}
+): Promise<ProtocolPlan> {
   if (medications.every((med) => !med.name.trim())) return { kind: 'none' }
 
-  return planProtocol(await loadPricingCatalog(), medications)
+  const [catalog, coupon] = await Promise.all([
+    loadPricingCatalog(),
+    loadCouponByCode(pricing.couponCode ?? null),
+  ])
+
+  return planProtocol(catalog, medications, new Date(), {
+    selectedDiscountIds: pricing.selectedDiscountIds,
+    coupon,
+  })
 }
 
 /**

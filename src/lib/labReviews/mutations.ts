@@ -16,6 +16,7 @@ import {
 import { protocolOutcome, type ProtocolPlan } from '@/lib/protocols/protocolPlan'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { FLAG } from './clinicalIds'
+import { draftPricing } from './discountSeed'
 import {
   planCompletion,
   validateCompletion,
@@ -351,7 +352,7 @@ export async function completeLabReview(
   // to know whether a quote is going out, and the note written further down has to
   // say what the patient was quoted. Held and passed along rather than re-derived,
   // so the note and the email cannot state different prices.
-  const protocol = await planProtocolFor(draft.newMedications)
+  const protocol = await planProtocolFor(draft.newMedications, draftPricing(draft))
 
   // Asked before anything is written, because the answer can only be acted on
   // while the review is still open.
@@ -471,7 +472,11 @@ export async function closeLabReview(
 
   const admin = createAdminClient()
   const actor = await resolveActor(access)
-  const plan = planCompletion(draft, actor.displayName, protocolOutcome(await planProtocolFor(draft.newMedications)))
+  const plan = planCompletion(
+    draft,
+    actor.displayName,
+    protocolOutcome(await planProtocolFor(draft.newMedications, draftPricing(draft)))
+  )
   const now = new Date().toISOString()
 
   const { data: updated, error } = await admin

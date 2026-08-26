@@ -7,6 +7,7 @@ import { protocolOutcome } from '@/lib/protocols/protocolPlan'
 import { createAdminClient } from '@/lib/supabase/admin'
 
 import { FLAG } from './clinicalIds'
+import { draftPricing } from './discountSeed'
 import { planCompletion, reviewAudiences } from './completion'
 import { planCsAction } from './csAction'
 import { logLabReviewEvent, resolveActor } from './events'
@@ -61,7 +62,9 @@ export async function applyLabReviewFollowUp(
 
   const patientId = review.patient_id as string
   const actor = await resolveActor(access)
-  const protocol = protocolOutcome(await planProtocolFor(draft.newMedications))
+  const protocol = protocolOutcome(
+    await planProtocolFor(draft.newMedications, draftPricing(draft))
+  )
   const plan = planCompletion(draft, actor.displayName, protocol)
   const { customerService } = reviewAudiences(draft, actor.displayName, protocol)
   const disposition = plan.detail.disposition

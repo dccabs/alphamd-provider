@@ -50,9 +50,8 @@ export const ANCILLARY_ONLY = 'Ancillary Only'
  *
  *  - `pricing_version` is stamped, so a later reader can tell which algorithm
  *    produced the numbers. Every row written before this app existed has null.
- *  - The discount and coupon columns are always empty, because this portal has no
- *    discount picker. That is a real gap rather than a shape difference — see
- *    `DISCOUNT_NOTICE`.
+ *  - Discount and coupon columns come from the quote when the Provider chose
+ *    them. An unchosen quote still writes empty arrays, matching the old gap.
  *
  * `plan_id` is left null, matching the admin app, which has never written it.
  * Nothing reads the column.
@@ -89,13 +88,11 @@ export function snapshotRow(
     total_per_month: dollars(subscription?.totalPerMonth),
     next_billing_date: subscription?.nextBillingDate ?? null,
 
-    // Selections. Only the mandatory add-ons are ever named; nothing here picks
-    // a discount or a coupon.
     selected_addon_ids: quote.subscription?.addonIds ?? [],
-    selected_discount_ids: [],
+    selected_discount_ids: quote.subscription?.selectedDiscountIds ?? [],
     custom_addons: [],
-    custom_discounts: [],
-    coupon_code_applied: null,
+    custom_discounts: quote.subscription?.customDiscounts ?? [],
+    coupon_code_applied: quote.subscription?.couponCode ?? null,
 
     // The one-off half.
     ancillary_line_items: quote.ancillaries.lines.map(ancillaryLineJson),

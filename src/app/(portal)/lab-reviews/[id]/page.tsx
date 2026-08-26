@@ -7,6 +7,7 @@ import {
   getLabReview,
   getMedicationCatalog,
   getMedications,
+  getPatientDiscountEligibility,
   getPatientHeader,
   listProviders,
 } from '@/lib/labReviews/queries'
@@ -64,6 +65,7 @@ export default async function LabReviewDetailPage({
     // here so the confirmation screen can show that note as it will actually
     // read. Falls back to the email exactly as the write path does.
     actor,
+    eligibility,
   ] = await Promise.all([
     getPatientHeader(review.patientId),
     getNotes(review.patientId),
@@ -80,6 +82,7 @@ export default async function LabReviewDetailPage({
     getMedicationCatalog(),
     getDosageOptions(),
     resolveActor(access.access),
+    getPatientDiscountEligibility(review.patientId),
   ])
 
   if (!header) notFound()
@@ -136,6 +139,9 @@ export default async function LabReviewDetailPage({
       initialSignError={
         initialFile && !initialSignedUrl ? 'Could not create a link for this file.' : null
       }
+      inNewsletter={eligibility.inNewsletter}
+      assignedCoupon={eligibility.coupon}
+      subscriptionMedicationIds={eligibility.subscriptionMedicationIds}
     />
   )
 }

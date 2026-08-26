@@ -297,6 +297,35 @@ test('a dose-priced product added without a dose is handed over, not charged zer
   assert.equal(plan.blocks[0].reason, 'dose-required')
 })
 
+test('a chosen catalog discount comes off the monthly price', () => {
+  const quote = planProtocol(CATALOG, [cypionate(160)], NOW, { selectedDiscountIds: [1] })
+  assert.equal(quote.kind, 'quote')
+  assert.ok(quote.quote.subscription)
+  assert.deepEqual(quote.quote.subscription.selectedDiscountIds, [1])
+  assert.ok(quote.quote.subscription.priced.monthlyDiscountBreakdown.length > 0)
+  assert.deepEqual(quote.quote.unusedDiscounts, [])
+})
+
+test('a discount the product cannot take stays unused and off the quote', () => {
+  // Weight Loss Program is trt_only; Semaglutide is not TRT.
+  const plan = planProtocol(
+    CATALOG,
+    [
+      med({
+        medicationId: PRODUCTS.semaglutide.medicationId,
+        name: 'Semaglutide',
+        dose: '0.25mg weekly',
+      }),
+    ],
+    NOW,
+    { selectedDiscountIds: [2] }
+  )
+  assert.equal(plan.kind, 'quote')
+  assert.deepEqual(plan.quote.subscription?.selectedDiscountIds, [])
+  assert.equal(plan.quote.unusedDiscounts[0]?.name, 'Weight Loss Program')
+  assert.match(plan.quote.unusedDiscounts[0]?.reason ?? '', /not offered/)
+})
+
 test('the billing date comes from the clock it was given', () => {
   const quote = quoteOf([cypionate(160)])
 

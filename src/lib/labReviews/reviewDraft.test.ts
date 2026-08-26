@@ -67,9 +67,30 @@ test('a full draft round-trips', () => {
     providerNote: 'Discussed with patient',
     chartSummary: 'Follow-up needed. New medications were added and the patient was emailed.',
     skippedSteps: ['doseChanges'],
+    selectedDiscountIds: [1, 6],
+    couponCode: 'SWITCH2026',
+    discountsSeeded: true,
   }
 
   assert.deepEqual(parseDraft(stored), stored)
+})
+
+test('a draft saved before discounts existed reads as unseeded with none chosen', () => {
+  const draft = parseDraft({ disposition: 'treatment_recommended' })
+  assert.deepEqual(draft.selectedDiscountIds, [])
+  assert.equal(draft.couponCode, null)
+  assert.equal(draft.discountsSeeded, false)
+})
+
+test('junk discount ids are dropped so a malformed column cannot price a fake catalog row', () => {
+  const draft = parseDraft({
+    selectedDiscountIds: [6, 0, -1, 6, 1.5, '8', null, 1],
+    couponCode: '  ',
+    discountsSeeded: 'yes',
+  })
+  assert.deepEqual(draft.selectedDiscountIds, [6, 1])
+  assert.equal(draft.couponCode, null)
+  assert.equal(draft.discountsSeeded, false)
 })
 
 test('a skipped step survives the round trip, so a resumed review is not re-asked', () => {

@@ -2,8 +2,13 @@
 // TypeScript through Node's type stripping and needs the real extension.
 import type { ProtocolOutcome } from '../labReviews/completion.ts'
 import type { DraftMedication } from '../labReviews/reviewDraft.ts'
+import {
+  couponAsCustomDiscount,
+  couponToPricing,
+  type AssignedCoupon,
+} from './assignedCoupon.ts'
 import { pricingBreakdown } from './breakdown.ts'
-import { automaticAddons, type PricingCatalog } from './catalog.ts'
+import { automaticAddons, eligibleDiscounts, type PricingCatalog } from './catalog.ts'
 import { formatUsd, type Cents } from './money.ts'
 import {
   grandTotal,
@@ -134,7 +139,26 @@ export type QuotedSubscription = {
   productId: number
   /** What went into `selected_addon_ids`. */
   addonIds: number[]
+  /** Catalog ids that actually applied (eligible ∩ chosen). */
+  selectedDiscountIds: number[]
+  couponCode: string | null
+  customDiscounts: {
+    name: string
+    type: 'percentage' | 'fixed'
+    scope: 'monthly' | 'first_month' | 'overall' | 'target_price'
+    value: number
+  }[]
   priced: PricedSubscription
+}
+
+export type UnusedDiscount = {
+  name: string
+  reason: string
+}
+
+export type ProtocolPricing = {
+  selectedDiscountIds?: number[]
+  coupon?: AssignedCoupon | null
 }
 
 /**
@@ -163,6 +187,10 @@ export type ProtocolQuote = {
   medications: QuotedMedication[]
   /** What the patient pays today for both halves together. */
   grandTotal: Cents
+  /** Chosen Catalog Discounts this Subscription cannot take. */
+  unusedDiscounts: UnusedDiscount[]
+  /** Catalog Discounts this Subscription may be given. */
+  offeredDiscounts: { id: number; name: string }[]
 }
 
 export type ProtocolPlan =
@@ -188,7 +216,8 @@ function instructionsFor(med: DraftMedication): string {
 export function planProtocol(
   catalog: PricingCatalog,
   medications: DraftMedication[],
-  now: Date = new Date()
+  now: Date = new Date(),
+  pricing: ProtocolPricing = {}
 ): ProtocolPlan {
   const added = priceable(medications)
   if (added.length === 0) return { kind: 'none' }
@@ -252,10 +281,9 @@ export function planProtocol(
           // falls back to `${dosageMg}mg` only when this is absent, and `0mg`
           // on a quote would be worse than the sentence they wrote.
           dosageLabel: med.dosageMg === null ? med.dose.trim() || null : null,
-          // No discount picker in this portal, so nothing is applied. See
-          // `DISCOUNT_NOTICE`.
-          selectedDiscountIds: [],
+          selectedDiscountIds: pricing.selectedDiscountIds ?? [],
           selectedAddonIds: addonIds,
+          ...couponPricing(pricing.coupon),
         },
         now
       )
@@ -265,9 +293,19 @@ export function planProtocol(
         continue
       }
 
+      const chosen = pricing.selectedDiscountIds ?? []
+      const offered = new Set(
+        eligibleDiscounts(catalog, resolution.product, now).map((discount) => discount.id)
+      )
+      const appliedIds = chosen.filter((id) => offered.has(id))
+      const custom = pricing.coupon ? couponAsCustomDiscount(pricing.coupon) : null
+
       subscription = {
         productId: resolution.product.id,
         addonIds,
+        selectedDiscountIds: appliedIds,
+        couponCode: pricing.coupon?.code ?? null,
+        customDiscounts: custom ? [custom] : [],
         priced: priceSubscription(input, now),
       }
       quoted.push({
@@ -292,6 +330,10 @@ export function planProtocol(
   if (blocks.length) return { kind: 'blocked', blocks }
 
   const ancillaries = priceAncillaries(ancillarySelections)
+  const unusedDiscounts = unusedSelections(catalog, subscription, pricing, now)
+  const product = subscription
+    ? catalog.subscriptions.find((row) => row.id === subscription.productId)
+    : null
 
   return {
     kind: 'quote',
@@ -301,8 +343,61 @@ export function planProtocol(
       ancillaries,
       medications: quoted,
       grandTotal: grandTotal(subscription?.priced ?? null, ancillaries),
+      unusedDiscounts,
+      offeredDiscounts: product
+        ? eligibleDiscounts(catalog, product, now).map((discount) => ({
+            id: discount.id,
+            name: discount.name,
+          }))
+        : [],
     },
   }
+}
+
+function couponPricing(coupon: AssignedCoupon | null | undefined) {
+  if (!coupon) return { targetPrice: null, extraDiscounts: [] }
+  const { targetPrice, discounts } = couponToPricing(coupon)
+  return { targetPrice, extraDiscounts: discounts }
+}
+
+function unusedSelections(
+  catalog: PricingCatalog,
+  subscription: QuotedSubscription | null,
+  pricing: ProtocolPricing,
+  now: Date
+): UnusedDiscount[] {
+  const chosen = pricing.selectedDiscountIds ?? []
+  const unused: UnusedDiscount[] = []
+
+  if (!subscription) {
+    for (const id of chosen) {
+      unused.push({
+        name: catalog.discounts.find((discount) => discount.id === id)?.name ?? `Discount ${id}`,
+        reason: 'there is no subscription on this quote',
+      })
+    }
+    if (pricing.coupon) {
+      unused.push({
+        name: `Coupon ${pricing.coupon.code}`,
+        reason: 'there is no subscription on this quote',
+      })
+    }
+    return unused
+  }
+
+  const product = catalog.subscriptions.find((row) => row.id === subscription.productId)
+  if (!product) return unused
+
+  const offered = new Set(eligibleDiscounts(catalog, product, now).map((discount) => discount.id))
+  for (const id of chosen) {
+    if (offered.has(id)) continue
+    unused.push({
+      name: catalog.discounts.find((discount) => discount.id === id)?.name ?? `Discount ${id}`,
+      reason: `not offered on ${product.name}`,
+    })
+  }
+
+  return unused
 }
 
 /**
@@ -336,17 +431,12 @@ export function blockLine(block: PricingBlock): string {
 }
 
 /**
- * The one thing a quote is always missing.
+ * The caveat on a quote that still has no Catalog Discount or Coupon on it.
  *
- * This portal has no discount picker, so a protocol it prices is quoted at list.
- * A patient entitled to the military or first responder discount is therefore
- * quoted too much, and nobody downstream would know unless told, because the
- * snapshot records `selected_discount_ids: []` and looks like a deliberate
- * decision rather than an absence.
- *
- * Saying so on the chart note is the cheap half of the fix. Whether providers
- * should be choosing discounts inside a lab review is a separate question, and
- * one worth answering with an eligibility record rather than another checkbox.
+ * A patient entitled to military or first responder who was quoted list is
+ * charged too much, and a snapshot with empty `selected_discount_ids` looks like
+ * a deliberate choice. Saying so on the chart is the cheap half. The Discounts
+ * step is the other half — and this sentence drops off once something applied.
  */
 export const DISCOUNT_NOTICE =
   'Quoted at list price with no discounts applied. If the patient qualifies for one, apply it before billing.'
@@ -368,10 +458,19 @@ export function protocolOutcome(plan: ProtocolPlan): ProtocolOutcome | null {
     return { kind: 'handed-off', reasons: plan.blocks.map(blockLine) }
   }
 
+  const priced = plan.quote.subscription?.priced
+  const applied =
+    (priced?.monthlyDiscountBreakdown.length ?? 0) +
+      (priced?.overallDiscountBreakdown.length ?? 0) >
+    0
+
   return {
     kind: 'quote',
     lines: pricingBreakdown(plan.quote),
     total: formatUsd(plan.quote.grandTotal),
-    caveat: DISCOUNT_NOTICE,
+    caveat: applied ? '' : DISCOUNT_NOTICE,
+    unusedDiscounts: plan.quote.unusedDiscounts.map(
+      (item) => `${item.name} — ${item.reason}`
+    ),
   }
 }

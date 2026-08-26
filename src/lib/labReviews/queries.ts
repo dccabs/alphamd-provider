@@ -9,6 +9,8 @@ import {
   type Analyte,
   type AnalyteCollection,
 } from './analytes'
+import { loadCouponByCode, listSubscriptionMedicationIds } from '@/lib/protocols/loadCatalog'
+import type { AssignedCoupon } from '@/lib/protocols/assignedCoupon'
 import { RESTRICTED_MEDICATION_IDS } from './clinicalIds'
 import {
   PATIENT_SEARCH_MIN_CHARS,
@@ -830,4 +832,49 @@ export async function getMedicationCatalog(): Promise<CatalogMedication[]> {
       type: (row.type as string | null)?.trim() || null,
     }))
     .filter((med) => med.name.length > 0 && !RESTRICTED_MEDICATION_IDS.includes(med.id))
+}
+
+export type PatientDiscountEligibility = {
+  inNewsletter: boolean
+  coupon: AssignedCoupon | null
+  subscriptionMedicationIds: number[]
+}
+
+export async function getPatientDiscountEligibility(
+  patientId: string
+): Promise<PatientDiscountEligibility> {
+  const admin = createAdminClient()
+
+  const [user, subscriptionMedicationIds] = await Promise.all([
+    admin
+      .from('user_list')
+      .select('coupon_code, email')
+      .eq('user_id', patientId)
+      .maybeSingle(),
+    listSubscriptionMedicationIds(),
+  ])
+
+  if (user.error) throw new Error(`user_list coupon lookup failed: ${user.error.message}`)
+
+  const email = ((user.data?.email as string | null) ?? '').trim()
+  // People re-sign up. One email can have several undismissed rows; we only
+  // need to know whether any of them exist. `.maybeSingle()` throws on two.
+  const signup = email
+    ? await admin
+        .from('newsletter_signups')
+        .select('id')
+        .eq('email', email)
+        .eq('dismissed', false)
+        .limit(1)
+    : { data: [], error: null }
+
+  if (signup.error) {
+    throw new Error(`newsletter_signups lookup failed: ${signup.error.message}`)
+  }
+
+  return {
+    inNewsletter: (signup.data?.length ?? 0) > 0,
+    coupon: await loadCouponByCode((user.data?.coupon_code as string | null) ?? null),
+    subscriptionMedicationIds,
+  }
 }

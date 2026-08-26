@@ -99,8 +99,10 @@ export type ProtocolOutcome =
       lines: string[]
       /** Formatted, e.g. `$137.39`. */
       total: string
-      /** The one caveat every quote from this portal carries. */
+      /** Empty when a Catalog Discount or Coupon landed on the quote. */
       caveat: string
+      /** Chosen discounts this Subscription cannot take. */
+      unusedDiscounts: string[]
     }
   /** Nothing was sent; a human prices it. The reasons are written for that human. */
   | { kind: 'handed-off'; reasons: string[] }
@@ -407,7 +409,12 @@ function protocolInstructions(protocol: ProtocolOutcome | null): string[] {
   }
 
   return [
-    `Recommended protocol — the patient is emailed a quote for ${protocol.total} due today. They approve and pay on their protocol page, and it ships after that; nothing to do here unless they ask. ${protocol.caveat}`,
+    [
+      `Recommended protocol — the patient is emailed a quote for ${protocol.total} due today. They approve and pay on their protocol page, and it ships after that; nothing to do here unless they ask.`,
+      protocol.caveat,
+    ]
+      .filter(Boolean)
+      .join(' '),
   ]
 }
 
@@ -506,7 +513,11 @@ export function completionEvents(
   for (const medication of added) lines.push(medication.chart)
 
   if (protocol?.kind === 'quote') {
-    lines.push(`Recommended protocol sent — ${protocol.total} due today. ${protocol.caveat}`)
+    lines.push(
+      [`Recommended protocol sent — ${protocol.total} due today.`, protocol.caveat]
+        .filter(Boolean)
+        .join(' ')
+    )
   }
   if (protocol?.kind === 'handed-off') {
     lines.push(

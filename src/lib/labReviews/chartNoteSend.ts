@@ -7,6 +7,7 @@ import { withPricingSnapshot } from '@/lib/protocols/snapshot'
 import { createAdminClient } from '@/lib/supabase/admin'
 
 import { planCompletion } from './completion'
+import { draftPricing } from './discountSeed'
 import { logLabReviewEvent, resolveActor } from './events'
 import type { ReviewDraft } from './reviewDraft'
 
@@ -41,7 +42,9 @@ export async function writeLabReviewChartNote(
   if (!review) return { status: 'error', message: 'This review no longer exists.' }
 
   const actor = await resolveActor(access)
-  const protocol = protocolOutcome(await planProtocolFor(draft.newMedications))
+  const protocol = protocolOutcome(
+    await planProtocolFor(draft.newMedications, draftPricing(draft))
+  )
   const plan = planCompletion(draft, actor.displayName, protocol)
 
   const { error: noteError } = await admin.from('patient_notes_private').insert({

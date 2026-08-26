@@ -37,6 +37,7 @@ import type { PatientWorkflow, ReviewDraft } from './reviewDraft.ts'
 export const REVIEW_STEPS = [
   'doseChanges',
   'newMedications',
+  'discounts',
   'labOrders',
   'consultation',
   'providerNote',
@@ -53,6 +54,7 @@ export function isReviewStep(value: unknown): value is ReviewStepId {
 export const STEP_TITLES: Record<ReviewStepId, string> = {
   doseChanges: 'Dose changes',
   newMedications: 'New medications',
+  discounts: 'Discounts',
   labOrders: 'Labs to order',
   consultation: 'Consultation',
   providerNote: 'Note for the chart',
@@ -71,6 +73,7 @@ export const STEP_TITLES: Record<ReviewStepId, string> = {
 export const STEP_SKIPPED_LABELS: Record<ReviewStepId, string> = {
   doseChanges: 'No dose changes',
   newMedications: 'No new medications',
+  discounts: 'No discounts',
   labOrders: 'No labs to order',
   consultation: 'No consultation',
   providerNote: 'Nothing added to the chart',
@@ -85,6 +88,8 @@ export function hasContent(step: ReviewStepId, draft: ReviewDraft): boolean {
       return draft.doseChanges.length > 0
     case 'newMedications':
       return draft.newMedications.length > 0
+    case 'discounts':
+      return draft.selectedDiscountIds.length > 0 || draft.couponCode !== null
     case 'labOrders':
       return draft.labOrders.length > 0
     case 'consultation':
@@ -111,9 +116,15 @@ export function hasContent(step: ReviewStepId, draft: ReviewDraft): boolean {
  * panel holding it has to remain reachable, because it is the only place it can be
  * removed.
  */
+export type StepsContext = {
+  /** True when the draft's new medications resolve to a Subscription. */
+  hasQuotedSubscription?: boolean
+}
+
 export function stepsFor(
   draft: ReviewDraft,
-  workflow: PatientWorkflow = 'member'
+  workflow: PatientWorkflow = 'member',
+  context: StepsContext = {}
 ): ReviewStepId[] {
   if (draft.disposition === null) return []
 
@@ -130,6 +141,12 @@ export function stepsFor(
         draft.disposition === 'treatment_not_recommended' ||
         (workflow === 'onboarding' && draft.disposition === 'follow_up_needed')
       return !startingNothing || hasContent(step, draft)
+    }
+    // Catalog Discounts come off a Subscription. No Subscription means nothing
+    // to discount — unless a leftover selection is still on the draft, which
+    // has to stay reachable so it can be cleared.
+    if (step === 'discounts') {
+      return context.hasQuotedSubscription === true || hasContent(step, draft)
     }
     // Declining treatment is a close-out. A consult to explain it is still
     // useful; ordering more labs is not.
@@ -148,9 +165,10 @@ export function isSettled(step: ReviewStepId, draft: ReviewDraft): boolean {
 /** The step the provider is on, or null when every applicable step is settled. */
 export function openStep(
   draft: ReviewDraft,
-  workflow: PatientWorkflow = 'member'
+  workflow: PatientWorkflow = 'member',
+  context: StepsContext = {}
 ): ReviewStepId | null {
-  return stepsFor(draft, workflow).find((step) => !isSettled(step, draft)) ?? null
+  return stepsFor(draft, workflow, context).find((step) => !isSettled(step, draft)) ?? null
 }
 
 /**
@@ -164,11 +182,12 @@ export function openStep(
 export function pinnedOpenStep(
   draft: ReviewDraft,
   pin: ReviewStepId | null,
-  workflow: PatientWorkflow = 'member'
+  workflow: PatientWorkflow = 'member',
+  context: StepsContext = {}
 ): ReviewStepId | null {
-  const steps = stepsFor(draft, workflow)
+  const steps = stepsFor(draft, workflow, context)
   if (pin && steps.includes(pin)) return pin
-  return openStep(draft, workflow)
+  return openStep(draft, workflow, context)
 }
 
 /**
@@ -180,9 +199,10 @@ export function pinnedOpenStep(
  */
 export function allSettled(
   draft: ReviewDraft,
-  workflow: PatientWorkflow = 'member'
+  workflow: PatientWorkflow = 'member',
+  context: StepsContext = {}
 ): boolean {
-  return draft.disposition !== null && openStep(draft, workflow) === null
+  return draft.disposition !== null && openStep(draft, workflow, context) === null
 }
 
 /** Adding a skip, without recording it twice. */
@@ -244,6 +264,18 @@ export function stepSummary(step: ReviewStepId, draft: ReviewDraft): string {
           [med.name.trim(), med.dose.trim()].filter(Boolean).join(' — ')
         )
       )
+    case 'discounts': {
+      const parts: string[] = []
+      if (draft.selectedDiscountIds.length > 0) {
+        parts.push(
+          draft.selectedDiscountIds.length === 1
+            ? '1 catalog discount'
+            : `${draft.selectedDiscountIds.length} catalog discounts`
+        )
+      }
+      if (draft.couponCode) parts.push(`Coupon ${draft.couponCode}`)
+      return joined(parts)
+    }
     case 'labOrders':
       return joined(draft.labOrders.map((order) => orderLine(order)))
     case 'consultation':

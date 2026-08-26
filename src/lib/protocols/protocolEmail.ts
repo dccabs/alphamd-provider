@@ -25,8 +25,8 @@ import { toStructuredPricing, type StructuredPricingData } from './structuredPri
  *    charge will be. It reads like boilerplate and is the most valuable paragraph
  *    in the message: a patient who does not expect the second charge disputes it.
  *
- * What is not kept is the coupon wording, because this portal applies no
- * discounts. The HTML is not composed here: `renderProtocolEmailHtml` feeds
+ * Coupon wording comes from the quote when a Coupon was applied. The HTML is
+ * not composed here: `renderProtocolEmailHtml` feeds
  * this text and `pricingData` into the ported `PricingProtocolEmail` template,
  * which is the letter the admin app sends.
  */

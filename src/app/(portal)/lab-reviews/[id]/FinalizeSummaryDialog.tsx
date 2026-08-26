@@ -1010,7 +1010,7 @@ function useProtocolPreview(draft: ReviewDraft): PreviewState {
     let live = true
 
     previewProtocolAction(JSON.stringify(draft))
-      .then((outcome) => live && setPreview({ state: 'ready', outcome }))
+      .then((preview) => live && setPreview({ state: 'ready', outcome: preview.outcome }))
       .catch(() => live && setPreview({ state: 'error' }))
 
     return () => {
@@ -1066,7 +1066,19 @@ function ProtocolSection({
         <pre className="mt-1.5 font-sans text-xs leading-relaxed whitespace-pre-wrap">
           {protocol.lines.join('\n')}
         </pre>
-        <p className="mt-2 text-xs text-muted-foreground">{protocol.caveat}</p>
+        {protocol.caveat ? (
+          <p className="mt-2 text-xs text-muted-foreground">{protocol.caveat}</p>
+        ) : null}
+        {protocol.unusedDiscounts.length > 0 ? (
+          <div className="mt-2 text-xs text-muted-foreground">
+            <p className="font-medium text-foreground">Checked but not used</p>
+            <ul className="mt-1">
+              {protocol.unusedDiscounts.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
       </div>
       {status}
     </Section>

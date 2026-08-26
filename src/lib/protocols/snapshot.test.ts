@@ -180,11 +180,9 @@ test('a protocol with no subscription is recorded under the sentinel', () => {
   assert.equal(row.grand_total, 300)
 })
 
-test('a quote from this portal never claims a discount was applied', () => {
+test('a quote with nothing chosen still records empty discount columns', () => {
   const row = snapshotRow(quoteOf([TESTOSTERONE]), { createdBy: 'provider-uuid' })
 
-  // Empty because there is no picker, which is a gap rather than a decision —
-  // hence `DISCOUNT_NOTICE` on the chart note.
   assert.deepEqual(row.selected_discount_ids, [])
   assert.deepEqual(row.custom_discounts, [])
   assert.deepEqual(row.monthly_discount_breakdown, [])

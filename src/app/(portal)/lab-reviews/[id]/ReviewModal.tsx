@@ -47,6 +47,9 @@ import { DoseChangePanel } from './DoseChangePanel'
 import { FieldAssistButton } from './FieldAssistButton'
 import { FinalizeSummaryDialog } from './FinalizeSummaryDialog'
 import { LabOrdersPanel } from './LabOrdersPanel'
+import { seedDiscounts } from '@/lib/labReviews/discountSeed'
+import type { AssignedCoupon } from '@/lib/protocols/assignedCoupon'
+import { DiscountsPanel } from './DiscountsPanel'
 import { NewMedicationPanel } from './NewMedicationPanel'
 import { ReviewStep } from './ReviewStep'
 import type { CatalogMedication, DosageOption, Medication } from './types'
@@ -114,6 +117,9 @@ export function ReviewModal({
   onCancelScheduledLab,
   initialDraft,
   draftUpdatedAt,
+  inNewsletter,
+  assignedCoupon,
+  subscriptionMedicationIds,
   onClose,
   onFinalized,
 }: {
@@ -153,6 +159,9 @@ export function ReviewModal({
   onCancelScheduledLab: (scheduledId: string) => void
   initialDraft: ReviewDraft
   draftUpdatedAt: string | null
+  inNewsletter: boolean
+  assignedCoupon: AssignedCoupon | null
+  subscriptionMedicationIds: number[]
   onClose: () => void
   /** Called once the review is finished. `warning` means it finished but a side
    *  effect — a flag, the status, the chart note — did not apply. */
@@ -180,7 +189,12 @@ export function ReviewModal({
    * where somebody is looking is not worth a round trip.
    */
   const [pin, setPin] = useState<ReviewStepId | null>(() =>
-    openStep(initialDraft, workflowFor(patientStatus))
+    openStep(initialDraft, workflowFor(patientStatus), {
+      hasQuotedSubscription: initialDraft.newMedications.some(
+        (med) =>
+          med.medicationId !== null && subscriptionMedicationIds.includes(med.medicationId)
+      ),
+    })
   )
 
   // The debounce timer and the close handler both need whatever the newest draft
@@ -195,6 +209,20 @@ export function ReviewModal({
     unsaved.current = true
     setEdits((n) => n + 1)
   }
+
+  useEffect(() => {
+    if (latest.current.discountsSeeded) return
+    const seeded = seedDiscounts(latest.current, {
+      inNewsletter,
+      coupon: assignedCoupon,
+    })
+    latest.current = seeded
+    setDraft(seeded)
+    unsaved.current = true
+    setEdits((n) => n + 1)
+    // Once per open: the draft is the source of truth after this.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const persist = useCallback(async () => {
     if (!unsaved.current) return
@@ -244,9 +272,13 @@ export function ReviewModal({
   const continuing = draft.disposition === 'continue_protocol'
   const declining = draft.disposition === 'treatment_not_recommended'
 
-  const steps = stepsFor(draft, workflow)
-  const current = pinnedOpenStep(draft, pin, workflow)
-  const settled = allSettled(draft, workflow)
+  const hasQuotedSubscription = draft.newMedications.some(
+    (med) => med.medicationId !== null && subscriptionMedicationIds.includes(med.medicationId)
+  )
+  const stepsContext = { hasQuotedSubscription }
+  const steps = stepsFor(draft, workflow, stepsContext)
+  const current = pinnedOpenStep(draft, pin, workflow, stepsContext)
+  const settled = allSettled(draft, workflow, stepsContext)
 
   const stateOf = (step: ReviewStepId): 'hidden' | 'open' | 'settled' => {
     if (!steps.includes(step)) return 'hidden'
@@ -269,7 +301,7 @@ export function ReviewModal({
     const at = latest.current
     const skippedSteps = hasContent(step, at) ? withoutSkip(at, step) : withSkip(at, step)
     update({ skippedSteps })
-    setPin(openStep({ ...at, skippedSteps }, workflow))
+    setPin(openStep({ ...at, skippedSteps }, workflow, stepsContext))
   }
 
   /** The plain props every step shares, so the seven call sites below stay
@@ -353,7 +385,9 @@ export function ReviewModal({
                   selected={draft.disposition === option}
                   onSelect={() => {
                     update({ disposition: option })
-                    setPin(openStep({ ...latest.current, disposition: option }, workflow))
+                    setPin(
+                      openStep({ ...latest.current, disposition: option }, workflow, stepsContext)
+                    )
                   }}
                 />
               ))}
@@ -385,6 +419,14 @@ export function ReviewModal({
               added={draft.newMedications}
               canAdd={!continuing && !declining}
               onChange={(newMedications) => update({ newMedications })}
+            />
+          </ReviewStep>
+
+          <ReviewStep {...stepProps('discounts')} onOpen={setPin} onAdvance={advance}>
+            <DiscountsPanel
+              draft={draft}
+              assignedCoupon={assignedCoupon}
+              onChange={(patch) => update(patch)}
             />
           </ReviewStep>
 

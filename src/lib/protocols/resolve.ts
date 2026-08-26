@@ -7,6 +7,7 @@ import {
   type PricingCatalog,
   type SubscriptionProduct,
 } from './catalog.ts'
+import type { Discount } from './discounts.ts'
 import type { AncillarySelection, SubscriptionInput, TargetPriceCoupon } from './price.ts'
 
 /**
@@ -112,6 +113,7 @@ export type SubscriptionRequest = {
   selectedDiscountIds?: number[]
   selectedAddonIds?: number[]
   targetPrice?: TargetPriceCoupon | null
+  extraDiscounts?: Discount[]
 }
 
 /**
@@ -140,7 +142,10 @@ export function subscriptionInput(
     isTaxable: request.product.isTaxable,
     taxRate: request.product.taxRate,
     addons: addonsFor(request.product, request.selectedAddonIds ?? []),
-    discounts: discountsFor(catalog, request.product, request.selectedDiscountIds ?? [], now),
+    discounts: [
+      ...discountsFor(catalog, request.product, request.selectedDiscountIds ?? [], now),
+      ...(request.extraDiscounts ?? []),
+    ],
     targetPrice: request.targetPrice ?? null,
   }
 }

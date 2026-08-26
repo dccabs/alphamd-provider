@@ -35,3 +35,27 @@ _Avoid_: Non-patient, lead, prospect
 **Member**:
 A Patient who has (or had) a subscription — active, paused, or cancelled. They already have a protocol to reason about.
 _Avoid_: Active patient (paused and cancelled are Members too)
+
+**Recommended Protocol**:
+The priced treatment plan emailed to a Patient after a Lab Review.
+_Avoid_: Quote (the price of the plan), POS, pricing email
+
+**Subscription**:
+The recurring product on a Recommended Protocol. Catalog Discounts come off this only.
+_Avoid_: Plan (a plan is a duration of this)
+
+**Ancillary**:
+A one-off medication on a Recommended Protocol. Catalog Discounts do not apply to it.
+_Avoid_: Add-on
+
+**Catalog Discount**:
+A named reduction off the Subscription, taken from the clinic's discount list (military, household, and the rest).
+_Avoid_: Coupon, promo, add-on
+
+**Coupon**:
+A code assigned to a Patient that can set a first-month or target price. A different thing from a Catalog Discount.
+_Avoid_: Discount (when the catalog list is meant)
+
+**Add-on**:
+A surcharge on a Subscription (dose, topical, and the like). Not a Catalog Discount.
+_Avoid_: Discount

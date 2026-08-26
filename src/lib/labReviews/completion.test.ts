@@ -1125,6 +1125,7 @@ const QUOTE: ProtocolOutcome = {
   lines: ['Testosterone Cypionate', 'Base Price: $129.00/mo', 'Subscription Total: $137.39'],
   total: '$137.39',
   caveat: 'Quoted at list price with no discounts applied.',
+  unusedDiscounts: [],
 }
 
 const HANDED_OFF: ProtocolOutcome = {

@@ -16,6 +16,7 @@ import {
 import type { ProtocolOutcome } from '@/lib/labReviews/completion'
 import { parseTargets } from '@/lib/labReviews/needsAttention'
 import { getPdfPageCount } from '@/lib/labReviews/pdf'
+import { draftPricing } from '@/lib/labReviews/discountSeed'
 import { parseDraft } from '@/lib/labReviews/reviewDraft'
 import { planProtocolFor } from '@/lib/protocols/mutations'
 import { protocolOutcome } from '@/lib/protocols/protocolPlan'
@@ -190,7 +191,8 @@ export async function sendRecommendedProtocolAction(
     return { status: 'error', message: 'Could not read the review.' }
   }
 
-  return sendLabReviewProtocol(access.access, reviewId, parseDraft(parsed).newMedications)
+  const draft = parseDraft(parsed)
+  return sendLabReviewProtocol(access.access, reviewId, draft)
 }
 
 /**
@@ -271,13 +273,23 @@ export async function sendLabReviewConsultationAction(
   return sendLabReviewConsultation(access.access, reviewId, parseDraft(parsed).consultation)
 }
 
-export async function previewProtocolAction(draftJson: string): Promise<ProtocolOutcome | null> {
+export type ProtocolPreview = {
+  outcome: ProtocolOutcome | null
+  offeredDiscounts: { id: number; name: string }[]
+}
+
+export async function previewProtocolAction(draftJson: string): Promise<ProtocolPreview> {
+  const empty = { outcome: null, offeredDiscounts: [] }
   const access = await checkProviderAccess()
-  if (!access.ok) return null
+  if (!access.ok) return empty
 
   const draft = parseDraft(JSON.parse(draftJson))
+  const plan = await planProtocolFor(draft.newMedications, draftPricing(draft))
 
-  return protocolOutcome(await planProtocolFor(draft.newMedications))
+  return {
+    outcome: protocolOutcome(plan),
+    offeredDiscounts: plan.kind === 'quote' ? plan.quote.offeredDiscounts : [],
+  }
 }
 
 /** Everything a lab-review write touches: the review, the queue it is ordered
@@ -405,12 +417,11 @@ export async function closeLabReviewAction(
 }
 
 /**
- * Park a review as needing attention, routed to customer service, another
- * provider, or both.
+ * Park a review as needing attention. Targets are optional: none keeps the
+ * review with the assigned provider. The note is required.
  *
- * The target list is re-parsed rather than trusted, and the note is required —
- * both checks are repeated from the panel because a server action is a public
- * endpoint.
+ * The target list is re-parsed rather than trusted — a server action is a
+ * public endpoint.
  */
 export async function escalateLabReviewAction(
   reviewId: string,

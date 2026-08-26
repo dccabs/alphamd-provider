@@ -50,6 +50,18 @@ function subscriptionLines(sub: PricedSubscription): string[] {
     lines.push(`${addon.name}: +${formatUsd(addon.amount)}/mo`)
   }
 
+  if (sub.monthlyDiscountBreakdown.length > 0) {
+    lines.push(`Before Discounts: ${formatUsd(sub.priceBeforeDiscounts)}/mo`)
+    for (const discount of sub.monthlyDiscountBreakdown) {
+      lines.push(`${discount.name}: -${formatUsd(discount.amount)}/mo`)
+    }
+    lines.push(`Monthly Subtotal: ${formatUsd(sub.monthlyAfterDiscounts)}/mo`)
+  }
+
+  for (const discount of sub.overallDiscountBreakdown) {
+    lines.push(`${discount.name}: -${formatUsd(discount.amount)}`)
+  }
+
   // A prepay term is quoted as a term total as well as a monthly rate, so the
   // figure on the card is one the patient has already seen written down.
   if (sub.durationMonths > 1) {

@@ -14,6 +14,7 @@ import type { Consultation } from '@/lib/labReviews/consultations'
 import { shortDate, shortDateTime } from '@/lib/labReviews/format'
 import type { Escalation } from '@/lib/labReviews/needsAttention'
 import type { Note } from '@/lib/labReviews/notes'
+import type { AssignedCoupon } from '@/lib/protocols/assignedCoupon'
 import type { ReviewDraft } from '@/lib/labReviews/reviewDraft'
 import type { Block } from '@/lib/labReviews/summaryMarkdown'
 import {
@@ -97,6 +98,9 @@ export function LabReviewScreen({
   initialFile,
   initialSignedUrl,
   initialSignError,
+  inNewsletter,
+  assignedCoupon,
+  subscriptionMedicationIds,
 }: {
   reviewId: string
   header: PatientHeader
@@ -141,6 +145,9 @@ export function LabReviewScreen({
   initialFile: PatientFile | null
   initialSignedUrl: string | null
   initialSignError: string | null
+  inNewsletter: boolean
+  assignedCoupon: AssignedCoupon | null
+  subscriptionMedicationIds: number[]
 }) {
   const [shownFile, setShownFile] = useState<PatientFile | null>(initialFile)
   const [signedUrl, setSignedUrl] = useState<string | null>(initialSignedUrl)
@@ -493,6 +500,9 @@ export function LabReviewScreen({
           onCancelScheduledLab={cancelOrder}
           initialDraft={draft}
           draftUpdatedAt={draftUpdatedAt}
+          inNewsletter={inNewsletter}
+          assignedCoupon={assignedCoupon}
+          subscriptionMedicationIds={subscriptionMedicationIds}
           onClose={closeReview}
           onFinalized={(warning) => {
             setWrite(warning ? { status: 'ok', warning } : { status: 'ok' })
