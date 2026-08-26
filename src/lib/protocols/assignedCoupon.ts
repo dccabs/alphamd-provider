@@ -38,6 +38,15 @@ export type CouponRow = {
   medication_target_price_1mo: number | null
 }
 
+/**
+ * `coupon_code.code` is not unique, and `.ilike` folds case, so ALPHASUMMER
+ * and AlphaSummer both come back. Prefer the exact assigned string.
+ */
+export function pickCouponRow(rows: CouponRow[], code: string): CouponRow | null {
+  if (!rows.length) return null
+  return rows.find((row) => row.code === code) ?? rows[0] ?? null
+}
+
 export function parseAssignedCoupon(row: CouponRow): AssignedCoupon {
   const type = row.medication_discount_type
   const scope = row.medication_discount_scope

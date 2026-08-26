@@ -6,7 +6,9 @@ import {
   couponToPricing,
   isCouponExpired,
   isLiveCoupon,
+  pickCouponRow,
   type AssignedCoupon,
+  type CouponRow,
 } from './assignedCoupon.ts'
 import { fromNumeric } from './money.ts'
 
@@ -52,6 +54,27 @@ test('a first-month percentage coupon is a discount with the coupon label', () =
   assert.equal(discounts[0]?.kind, 'percentage')
   assert.equal(discounts[0]?.scope, 'first_month')
   assert.match(discounts[0]?.label ?? '', /Coupon: HALF/)
+})
+
+test('when two coupons only differ by case, the assigned spelling wins', () => {
+  const alphaSummer: CouponRow = {
+    code: 'AlphaSummer',
+    expiration_date: '2028-06-08T05:00:00.000Z',
+    medication_discount_type: null,
+    medication_discount_value: null,
+    medication_discount_scope: 'first_month',
+    medication_target_price_1mo: null,
+  }
+  const upper: CouponRow = {
+    ...alphaSummer,
+    code: 'ALPHASUMMER',
+    expiration_date: '2029-11-08T06:00:00.000Z',
+  }
+
+  assert.equal(pickCouponRow([alphaSummer, upper], 'ALPHASUMMER')?.code, 'ALPHASUMMER')
+  assert.equal(pickCouponRow([alphaSummer, upper], 'AlphaSummer')?.code, 'AlphaSummer')
+  assert.equal(pickCouponRow([alphaSummer, upper], 'alphasummer')?.code, 'AlphaSummer')
+  assert.equal(pickCouponRow([], 'ALPHASUMMER'), null)
 })
 
 test('a date-only expiration stays live through the end of that day', () => {

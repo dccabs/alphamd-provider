@@ -2,7 +2,12 @@ import 'server-only'
 
 import { createAdminClient } from '@/lib/supabase/admin'
 
-import { parseAssignedCoupon, type AssignedCoupon, type CouponRow } from './assignedCoupon'
+import {
+  parseAssignedCoupon,
+  pickCouponRow,
+  type AssignedCoupon,
+  type CouponRow,
+} from './assignedCoupon'
 import {
   ANCILLARY_SELECT,
   DISCOUNT_SELECT,
@@ -64,18 +69,20 @@ export async function loadCouponByCode(code: string | null): Promise<AssignedCou
   const trimmed = code?.trim()
   if (!trimmed) return null
 
+  // Code is not unique. `.ilike` also folds case, so ALPHASUMMER and
+  // AlphaSummer both match. `.maybeSingle()` throws on two — same class of
+  // crash as a Patient with more than one newsletter signup.
   const { data, error } = await createAdminClient()
     .from('coupon_code')
     .select(
       'code, expiration_date, medication_discount_type, medication_discount_value, medication_discount_scope, medication_target_price_1mo'
     )
     .ilike('code', trimmed)
-    .maybeSingle()
 
   if (error) throw new Error(`Could not read coupon ${trimmed}: ${error.message}`)
-  if (!data) return null
 
-  return parseAssignedCoupon(data as CouponRow)
+  const row = pickCouponRow((data ?? []) as CouponRow[], trimmed)
+  return row ? parseAssignedCoupon(row) : null
 }
 
 export async function listSubscriptionMedicationIds(): Promise<number[]> {
