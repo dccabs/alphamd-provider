@@ -162,6 +162,19 @@ describe('systemPromptForField', () => {
     assert.doesNotMatch(prompt, /always as "your provider"/)
   })
 
+  it('holds every field to present tense for current status', () => {
+    // "You qualified" / "the patient qualified" reads as a closed event. The
+    // patient still qualifies; a field that put that in the past is wrong
+    // whether it is written to them, to the chart, or to customer service.
+    for (const field of REVIEW_FIELDS) {
+      const prompt = systemPromptForField(field)
+      assert.match(prompt, /present tense/i, field)
+      assert.match(prompt, /current status/i, field)
+      assert.match(prompt, /rewrite the tense/i, field)
+      assert.match(prompt, /Do not rewrite past tense that names a completed event/i, field)
+    }
+  })
+
   it('states eligibility in the present tense', () => {
     // "You qualified" reads as a closed event. The patient is hearing whether
     // they qualify now.
