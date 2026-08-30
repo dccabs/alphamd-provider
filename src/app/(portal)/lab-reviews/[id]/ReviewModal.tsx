@@ -404,6 +404,8 @@ export function ReviewModal({
               changes={draft.doseChanges}
               canChange={draft.disposition === 'dose_change'}
               onChange={(doseChanges) => update({ doseChanges })}
+              patientGender={patientGender}
+              patientState={patientState}
             />
           </ReviewStep>
 
@@ -419,6 +421,8 @@ export function ReviewModal({
               added={draft.newMedications}
               canAdd={!continuing && !declining}
               onChange={(newMedications) => update({ newMedications })}
+              patientGender={patientGender}
+              patientState={patientState}
             />
           </ReviewStep>
 

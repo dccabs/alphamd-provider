@@ -64,6 +64,8 @@ export function DoseChangePanel({
   changes,
   canChange,
   onChange,
+  patientGender,
+  patientState,
 }: {
   medications: Medication[]
   dosageOptions: DosageOption[]
@@ -74,6 +76,8 @@ export function DoseChangePanel({
    *  started. Without this the completion guard would be unfixable from here. */
   canChange: boolean
   onChange: (changes: DoseChange[]) => void
+  patientGender?: string | null
+  patientState?: string | null
 }) {
   /** Which prescription the dialog is on. Absent means it is closed. */
   const [editing, setEditing] = useState<Medication | null>(null)
@@ -148,6 +152,8 @@ export function DoseChangePanel({
           med={editing}
           options={dosageOptions.filter((o) => o.medicationId === editing.medicationId)}
           initial={changes.find((change) => change.medicationId === editing.id) ?? null}
+          patientGender={patientGender}
+          patientState={patientState}
           onCancel={() => setEditing(null)}
           onConfirm={confirm}
         />
@@ -245,6 +251,8 @@ function DoseChangeDialog({
   med,
   options,
   initial,
+  patientGender,
+  patientState,
   onCancel,
   onConfirm,
 }: {
@@ -253,6 +261,8 @@ function DoseChangeDialog({
   options: DosageOption[]
   /** A change already confirmed for this medication, when reopening to edit it. */
   initial: DoseChange | null
+  patientGender?: string | null
+  patientState?: string | null
   onCancel: () => void
   onConfirm: (change: DoseChange) => void
 }) {
@@ -275,8 +285,10 @@ function DoseChangeDialog({
               ...initial,
               perWeek: reopened?.kind === 'injection' ? reopened.perWeek : undefined,
               route: reopened?.kind === 'injection' ? reopened.route : undefined,
+              concentration: reopened?.kind === 'injection' ? reopened.concentration : undefined,
             }
           : null,
+      patient: { gender: patientGender, state: patientState },
       options,
     })
   )
@@ -302,7 +314,8 @@ function DoseChangeDialog({
       ? !!chosen &&
         Number.parseFloat(selection.weeklyMg) === current.weeklyMg &&
         selection.perWeek === current.perWeek &&
-        selection.route === current.route
+        selection.route === current.route &&
+        selection.concentration === current.concentration
       : !!chosen && pending.value === pending.from.trim()
 
   const lines = doseChangeLines(pending)
@@ -345,6 +358,8 @@ function DoseChangeDialog({
               calculated={calculated}
               options={options}
               idPrefix="dose"
+              patientGender={patientGender}
+              patientState={patientState}
             />
           </div>
 

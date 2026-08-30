@@ -23,18 +23,65 @@ test('a calculated dose becomes a level and the instruction it works out to', ()
   assert.equal(selection.weeklyMg, '140')
   assert.deepEqual(selectionValue(selection, { calculated: true, options: [] }), {
     value: '140mg/week',
-    sig: 'Inject .35mL subcutaneously every 3.5 days.',
+    sig: 'Inject .35mL subcutaneously every 3.5 days. 200mg/mL.',
     // Carried as a number, because a protocol built on this dose is priced on it.
     weeklyMg: 140,
   })
 })
 
-test('with nothing on record the calculator opens on the admin default', () => {
+test('with nothing on record the calculator opens on the male house default', () => {
   const selection = initialSelection({ options: [] })
 
   assert.equal(selection.weeklyMg, String(DEFAULT_WEEKLY_MG))
+  assert.equal(selection.concentration, 200)
   assert.equal(selection.perWeek, DEFAULT_PER_WEEK)
   assert.equal(selection.route, 'subcutaneously')
+})
+
+test('starting a medication for a female Patient opens on 20mg/mL and 10mg/week', () => {
+  const selection = initialSelection({
+    options: [],
+    patient: { gender: 'female', state: 'Texas' },
+  })
+
+  assert.equal(selection.weeklyMg, '10')
+  assert.equal(selection.concentration, 20)
+})
+
+test('starting a medication for a California female opens on 50mg/mL', () => {
+  const selection = initialSelection({
+    options: [],
+    patient: { gender: 'female', state: 'California' },
+  })
+
+  assert.equal(selection.weeklyMg, '10')
+  assert.equal(selection.concentration, 50)
+})
+
+test('a dose change keeps the Concentration already on the prescription', () => {
+  const selection = initialSelection({
+    from: { weeklyMg: 140, perWeek: 2, route: 'subcutaneously', concentration: 200 },
+    patient: { gender: 'female', state: 'Texas' },
+    options: [],
+  })
+
+  assert.equal(selection.weeklyMg, '140')
+  assert.equal(selection.concentration, 200)
+})
+
+test('a calculated dose at 20mg/mL writes that Concentration into the instruction', () => {
+  const selection = {
+    ...initialSelection({
+      from: { weeklyMg: 10, perWeek: 1, route: 'subcutaneously', concentration: 20 },
+      options: [],
+    }),
+  }
+
+  assert.deepEqual(selectionValue(selection, { calculated: true, options: [] }), {
+    value: '10mg/week',
+    sig: 'Inject .5mL subcutaneously once weekly on the same day every week. 20mg/mL.',
+    weeklyMg: 10,
+  })
 })
 
 test('a catalog dose is recorded as written, with no generated instruction', () => {

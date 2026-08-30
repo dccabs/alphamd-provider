@@ -4,7 +4,16 @@ import { DictationTextarea } from '@/components/ui/dictation-textarea'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { PERSONAL, type DoseSelection } from '@/lib/labReviews/doseSelection'
-import { INJECTION_FREQUENCIES, INJECTION_ROUTES, type Route } from '@/lib/labReviews/dosing'
+import {
+  AUDIENCE_NOTICE,
+  INJECTION_FREQUENCIES,
+  INJECTION_ROUTES,
+  doseAudience,
+  offeredConcentrations,
+  weeklyMgStep,
+  type Concentration,
+  type Route,
+} from '@/lib/labReviews/dosing'
 import type { DosageOption } from './types'
 
 /**
@@ -14,7 +23,7 @@ import type { DosageOption } from './types'
  * Which set is shown is the caller's decision, not this component's: `calculated`
  * comes from `dosesInWeeklyMg` for a medication being started and from the parsed
  * sig for one being changed. Guessing it from the data here would put the
- * 200mg/mL calculator in front of a provider prescribing a tablet.
+ * weekly-milligram calculator in front of a provider prescribing a tablet.
  *
  * Controlled, with the whole selection replaced on every edit, so the dialog that
  * owns it can derive the preview and the confirmed value from one object.
@@ -25,6 +34,8 @@ export function DoseFields({
   calculated,
   options,
   idPrefix,
+  patientGender,
+  patientState,
 }: {
   selection: DoseSelection
   onChange: (selection: DoseSelection) => void
@@ -34,12 +45,39 @@ export function DoseFields({
   options: DosageOption[]
   /** Distinguishes the field ids, since two dialogs can be mounted at once. */
   idPrefix: string
+  patientGender?: string | null
+  patientState?: string | null
 }) {
   const set = (patch: Partial<DoseSelection>) => onChange({ ...selection, ...patch })
 
   if (calculated) {
+    const patient = { gender: patientGender, state: patientState }
+    const audience = doseAudience(patient)
+    const concentrations = offeredConcentrations({
+      ...patient,
+      current: selection.concentration,
+    })
+
     return (
       <div className="grid grid-cols-2 gap-2.5">
+        <p className="col-span-2 text-xs text-muted-foreground">{AUDIENCE_NOTICE[audience]}</p>
+        <div className="flex flex-col gap-1">
+          <Label htmlFor={`${idPrefix}-concentration`} className="text-xs text-muted-foreground">
+            Concentration
+          </Label>
+          <select
+            id={`${idPrefix}-concentration`}
+            value={selection.concentration}
+            onChange={(e) => set({ concentration: Number(e.target.value) as Concentration })}
+            className={SELECT_CLASS}
+          >
+            {concentrations.map((mgPerMl) => (
+              <option key={mgPerMl} value={mgPerMl}>
+                {mgPerMl} mg/mL
+              </option>
+            ))}
+          </select>
+        </div>
         <div className="flex flex-col gap-1">
           <Label htmlFor={`${idPrefix}-weekly-mg`} className="text-xs text-muted-foreground">
             Weekly dose (mg)
@@ -49,7 +87,7 @@ export function DoseFields({
             type="number"
             inputMode="decimal"
             min={0}
-            step={10}
+            step={weeklyMgStep(selection.concentration)}
             value={selection.weeklyMg}
             onChange={(e) => set({ weeklyMg: e.target.value })}
           />
@@ -71,7 +109,7 @@ export function DoseFields({
             ))}
           </select>
         </div>
-        <div className="col-span-2 flex flex-col gap-1">
+        <div className="flex flex-col gap-1">
           <Label htmlFor={`${idPrefix}-frequency`} className="text-xs text-muted-foreground">
             Injections
           </Label>

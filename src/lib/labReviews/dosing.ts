@@ -9,31 +9,40 @@
  * share them without a database.
  *
  * The arithmetic is the admin medications tab's, from `components/AddMedication`
- * in the alphamd repo: `mL = weeklyMg / 200 / injectionsPerWeek`. Keeping the
- * same formula and the same frequency phrases means a dose written here reads
- * like the ones already on the chart, and parses back to the mg it was built
- * from.
+ * in the alphamd repo: `mL = weeklyMg / concentration / injectionsPerWeek`.
+ * Keeping the same formula and the same frequency phrases means a dose written
+ * here reads like the ones already on the chart, and parses back to the mg it
+ * was built from.
  *
- * **The concentration is the whole safety story.** 200mg/mL is true of
- * testosterone cypionate and false of most other injectables the clinic
- * prescribes: `HCG` is dosed in units, `Semaglutide`, `Sermorelin`, `Tirzepatide`
- * and `Nandrolone` all store mL-based sigs at their own concentrations. Reading a
- * mL figure and multiplying by 200 would put a confident, wrong number in front
- * of a prescriber. So `readDose` refuses to compute mg unless the medication is
- * named testosterone, and refuses again if the sig states a concentration that
- * is not 200mg/mL. Everything it will not read comes back `opaque`, which the UI
- * turns into a plain text field.
+ * **The Concentration is the whole safety story.** 20, 50 and 200 mg/mL are the
+ * vials the clinic dispenses for injectable testosterone. Most other injectables
+ * store mL-based sigs at their own concentrations: `HCG` is dosed in units,
+ * `Semaglutide`, `Sermorelin`, `Tirzepatide` and `Nandrolone` all differ.
+ * Reading a mL figure and multiplying by 200 would put a confident, wrong number
+ * in front of a prescriber. So `readDose` refuses to compute mg unless the
+ * medication is named testosterone, and refuses again if the sig states a
+ * Concentration that is not 20, 50 or 200. An unstated Concentration is read as
+ * 200 — that is what every existing house sig assumed. Everything it will not
+ * read comes back `opaque`, which the UI turns into a plain text field.
  */
 
 // Explicit `.ts` specifier, like the other modules `npm test` runs through Node's
 // type stripping. See the note on `allowImportingTsExtensions` in tsconfig.json.
 import { MEDICATION } from './clinicalIds.ts'
 
-/** The concentration every testosterone cypionate vial is compounded at. */
-const MG_PER_ML = 200
+/** The house default, and what an unstated Concentration on an existing sig is. */
+export const DEFAULT_CONCENTRATION = 200
 
-/** Doses are decided, and written, in multiples of ten milligrams a week. */
-const DOSE_STEP = 10
+/** The vials the clinic dispenses for injectable testosterone. */
+export const CONCENTRATIONS = [20, 50, 200] as const
+
+export type Concentration = (typeof CONCENTRATIONS)[number]
+
+const KNOWN_CONCENTRATION = new Set<number>(CONCENTRATIONS)
+
+/** Doses at 200mg/mL are decided in tens; 20 and 50 are decided in fives. */
+const DOSE_STEP_200 = 10
+const DOSE_STEP_DILUTE = 5
 
 /**
  * How far below a level the arithmetic is allowed to land and still be read as
@@ -65,6 +74,7 @@ export type CurrentDose =
       mlPerDose: number
       perWeek: number
       weeklyMg: number
+      concentration: Concentration
       route: Route
     }
   | { kind: 'opaque'; text: string | null }
@@ -107,8 +117,8 @@ const TESTOSTERONE = /testosterone/i
  * medication has no sig yet, only a `medications_list` row, so the calculator has
  * to be decided from the identity of the medication alone — and the name will not
  * do it: `Testosterone cream` and `Testosterone gel` both match
- * `/testosterone/i`, and neither is 200mg/mL. Both keep their catalog doses,
- * which are written in clicks.
+ * `/testosterone/i`, and neither is an injectable vial. Both keep their catalog
+ * doses, which are written in clicks.
  */
 export function dosesInWeeklyMg(medicationId: number): boolean {
   return (
@@ -144,13 +154,14 @@ export function readDose(med: { name: string; dosage: string | null }): CurrentD
   if (!text || !TESTOSTERONE.test(med.name)) return opaque
 
   const stated = text.match(CONCENTRATION)
-  if (stated && Number(stated[1]) !== MG_PER_ML) return opaque
+  const concentration = stated ? Number(stated[1]) : DEFAULT_CONCENTRATION
+  if (!KNOWN_CONCENTRATION.has(concentration)) return opaque
 
   const ml = text.match(ML)
   if (!ml) return opaque
 
-  const mlPerDose = Number(ml[1])
-  if (!Number.isFinite(mlPerDose) || mlPerDose <= 0) return opaque
+  const volume = Number(ml[1])
+  if (!Number.isFinite(volume) || volume <= 0) return opaque
 
   const perWeek = readFrequency(text)
   if (perWeek === null) return opaque
@@ -158,9 +169,10 @@ export function readDose(med: { name: string; dosage: string | null }): CurrentD
   return {
     kind: 'injection',
     text,
-    mlPerDose,
+    mlPerDose: volume,
     perWeek,
-    weeklyMg: doseLevel(mlPerDose * MG_PER_ML * perWeek),
+    weeklyMg: doseLevel(volume * concentration * perWeek, concentration),
+    concentration: concentration as Concentration,
     route: readRoute(text),
   }
 }
@@ -178,9 +190,14 @@ export function readDose(med: { name: string; dosage: string | null }): CurrentD
  * milligrams to round to, and a mistyped volume is better shown as the small
  * number it is than as nothing.
  */
-function doseLevel(weeklyMg: number): number {
-  const level = Math.floor((weeklyMg + LEVEL_SLACK) / DOSE_STEP) * DOSE_STEP
-  return level < DOSE_STEP ? Math.round(weeklyMg) : level
+function doseStep(concentration: number): number {
+  return concentration === DEFAULT_CONCENTRATION ? DOSE_STEP_200 : DOSE_STEP_DILUTE
+}
+
+function doseLevel(weeklyMg: number, concentration: number = DEFAULT_CONCENTRATION): number {
+  const step = doseStep(concentration)
+  const level = Math.floor((weeklyMg + LEVEL_SLACK) / step) * step
+  return level < step ? Math.round(weeklyMg) : level
 }
 
 function readFrequency(sig: string): number | null {
@@ -204,22 +221,36 @@ function readRoute(sig: string): Route {
 }
 
 /** The volume one injection has to be to deliver a weekly dose on a schedule. */
-export function mlPerDose(weeklyMg: number, perWeek: number): number {
+export function mlPerDose(
+  weeklyMg: number,
+  perWeek: number,
+  concentration: number = DEFAULT_CONCENTRATION
+): number {
   if (!Number.isFinite(weeklyMg) || !Number.isFinite(perWeek) || perWeek <= 0) return 0
-  return weeklyMg / MG_PER_ML / perWeek
+  if (!Number.isFinite(concentration) || concentration <= 0) return 0
+  return weeklyMg / concentration / perWeek
 }
 
 /**
  * A sig for a changed dose.
  *
- * It stops at the instruction. The admin builder appends
+ * It stops at the instruction plus the Concentration. The admin builder appends
  * `12.5 weeks, (11 weeks). 25 supplies.`, which is a function of the vial size
  * being dispensed — and nothing is being dispensed here. A review documents the
  * decision; the pharmacy detail is added when the prescription itself is edited.
+ *
+ * Concentration is always named, including 200, so the next review does not have
+ * to guess. See `docs/adr/0003-testosterone-concentration-on-sig.md`.
  */
-export function injectionSig(dose: { weeklyMg: number; perWeek: number; route: Route }): string {
+export function injectionSig(dose: {
+  weeklyMg: number
+  perWeek: number
+  route: Route
+  concentration?: number
+}): string {
+  const concentration = dose.concentration ?? DEFAULT_CONCENTRATION
   const phrase = FREQUENCY_PHRASE.get(dose.perWeek) ?? `${dose.perWeek} times weekly`
-  return `Inject ${formatMl(mlPerDose(dose.weeklyMg, dose.perWeek))}mL ${dose.route} ${phrase}.`
+  return `Inject ${formatMl(mlPerDose(dose.weeklyMg, dose.perWeek, concentration))}mL ${dose.route} ${phrase}. ${concentration}mg/mL.`
 }
 
 /** `.4`, `.267`, `.5` — three decimals with the leading and trailing zeros taken
@@ -238,4 +269,106 @@ function formatMl(ml: number): string {
  *  dialog, the chart note and the queue all say it the same way. */
 export function weeklyMgLabel(weeklyMg: number): string {
   return `${Math.round(weeklyMg)}mg/week`
+}
+
+/**
+ * Who the picker is showing options for, from the chart — the same three groups
+ * the admin pricing modal uses. Blank and `other` are male: that is the house
+ * default, and consultations already treat an unset gender that way.
+ */
+export type DoseAudience = 'male' | 'female' | 'california_female'
+
+export const AUDIENCE_NOTICE: Record<DoseAudience, string> = {
+  male: 'Showing options for males',
+  female: 'Showing options for female patients — non California',
+  california_female: 'Showing options for female California patients',
+}
+
+export type StartingDose = {
+  concentration: Concentration
+  weeklyMg: number
+  weeklyMgStep: number
+  audience: DoseAudience
+}
+
+const MALE_START: StartingDose = {
+  concentration: 200,
+  weeklyMg: 160,
+  weeklyMgStep: 10,
+  audience: 'male',
+}
+
+const FEMALE_START: StartingDose = {
+  concentration: 20,
+  weeklyMg: 10,
+  weeklyMgStep: 5,
+  audience: 'female',
+}
+
+const CALIFORNIA_FEMALE_START: StartingDose = {
+  concentration: 50,
+  weeklyMg: 10,
+  weeklyMgStep: 5,
+  audience: 'california_female',
+}
+
+function isFemale(gender: string | null | undefined): boolean {
+  const value = (gender ?? '').trim().toLowerCase()
+  return value === 'female' || value === 'f'
+}
+
+function isCalifornia(state: string | null | undefined): boolean {
+  return (state ?? '').trim().toLowerCase() === 'california'
+}
+
+export function doseAudience(patient: {
+  gender?: string | null
+  state?: string | null
+}): DoseAudience {
+  if (!isFemale(patient.gender)) return 'male'
+  return isCalifornia(patient.state) ? 'california_female' : 'female'
+}
+
+/** Defaults when *starting* a medication. A dose change keeps what is already on
+ *  the prescription — see `offeredConcentrations`. */
+export function startingDose(patient: {
+  gender?: string | null
+  state?: string | null
+}): StartingDose {
+  switch (doseAudience(patient)) {
+    case 'california_female':
+      return CALIFORNIA_FEMALE_START
+    case 'female':
+      return FEMALE_START
+    case 'male':
+      return MALE_START
+  }
+}
+
+/**
+ * Concentrations the picker offers.
+ *
+ * California females are locked to 50, matching the pricing modal. An existing
+ * prescription that is already at 20 or 200 stays on the list so opening a dose
+ * change does not silently reformulate it.
+ */
+export function offeredConcentrations(args: {
+  gender?: string | null
+  state?: string | null
+  current?: number | null
+}): Concentration[] {
+  const offered: Concentration[] =
+    doseAudience(args) === 'california_female' ? [50] : [...CONCENTRATIONS]
+
+  const current = args.current
+  if (current != null && KNOWN_CONCENTRATION.has(current) && !offered.includes(current as Concentration)) {
+    offered.push(current as Concentration)
+    offered.sort((a, b) => a - b)
+  }
+
+  return offered
+}
+
+export function weeklyMgStep(concentration: number): number {
+  return doseStep(concentration)
 }

@@ -59,3 +59,11 @@ _Avoid_: Discount (when the catalog list is meant)
 **Add-on**:
 A surcharge on a Subscription (dose, topical, and the like). Not a Catalog Discount.
 _Avoid_: Discount
+
+**Concentration**:
+Milligrams of testosterone in each millilitre of an injectable vial. A property of the vial, not of how much the Patient takes.
+_Avoid_: Strength, dose (that is Weekly dose), vial size (how much the pharmacy dispenses)
+
+**Weekly dose**:
+Milligrams of testosterone a Patient takes in a week. The figure a dose change is decided in.
+_Avoid_: Amount (the pricing modal's word), concentration

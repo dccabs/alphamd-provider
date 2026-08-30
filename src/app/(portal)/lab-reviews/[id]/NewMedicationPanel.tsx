@@ -51,6 +51,8 @@ export function NewMedicationPanel({
   added,
   canAdd,
   onChange,
+  patientGender,
+  patientState,
 }: {
   /** Everything that can be started. Restricted medications are already gone. */
   catalog: CatalogMedication[]
@@ -62,6 +64,8 @@ export function NewMedicationPanel({
    *  editable and removable, but no more can be started. */
   canAdd: boolean
   onChange: (added: DraftMedication[]) => void
+  patientGender?: string | null
+  patientState?: string | null
 }) {
   /** Which row the dialog is editing: an index, `'new'`, or closed. */
   const [editing, setEditing] = useState<number | 'new' | null>(null)
@@ -120,6 +124,8 @@ export function NewMedicationPanel({
           medications={medications}
           dosageOptions={dosageOptions}
           initial={editing === 'new' ? null : added[editing]}
+          patientGender={patientGender}
+          patientState={patientState}
           onCancel={() => setEditing(null)}
           onConfirm={confirm}
         />
@@ -170,6 +176,8 @@ function NewMedicationDialog({
   medications,
   dosageOptions,
   initial,
+  patientGender,
+  patientState,
   onCancel,
   onConfirm,
 }: {
@@ -178,6 +186,8 @@ function NewMedicationDialog({
   dosageOptions: DosageOption[]
   /** A medication already added, when reopening to edit it. */
   initial: DraftMedication | null
+  patientGender?: string | null
+  patientState?: string | null
   onCancel: () => void
   onConfirm: (med: DraftMedication) => void
 }) {
@@ -199,8 +209,10 @@ function NewMedicationDialog({
             sig: initial.sig,
             perWeek: reopened?.kind === 'injection' ? reopened.perWeek : undefined,
             route: reopened?.kind === 'injection' ? reopened.route : undefined,
+            concentration: reopened?.kind === 'injection' ? reopened.concentration : undefined,
           }
         : null,
+      patient: { gender: patientGender, state: patientState },
       options,
     })
   )
@@ -250,6 +262,7 @@ function NewMedicationDialog({
                 setSelection(
                   initialSelection({
                     options: dosageOptions.filter((option) => option.medicationId === next),
+                    patient: { gender: patientGender, state: patientState },
                   })
                 )
               }}
@@ -279,6 +292,8 @@ function NewMedicationDialog({
                 calculated={calculated}
                 options={options}
                 idPrefix="new-med"
+                patientGender={patientGender}
+                patientState={patientState}
               />
             </div>
           )}

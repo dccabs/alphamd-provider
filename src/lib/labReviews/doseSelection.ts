@@ -16,9 +16,12 @@
 // Explicit `.ts` specifiers: this module is exercised by `npm test`, which runs
 // TypeScript through Node's type stripping and needs the real extension.
 import {
+  DEFAULT_CONCENTRATION,
   INJECTION_FREQUENCIES,
   injectionSig,
+  startingDose,
   weeklyMgLabel,
+  type Concentration,
   type Route,
 } from './dosing.ts'
 
@@ -35,6 +38,7 @@ export type DoseSelection = {
   /** Weekly milligrams, as typed. A string because an empty number input is not
    *  a number, and `NaN` is not a state worth modelling. */
   weeklyMg: string
+  concentration: Concentration
   perWeek: number
   route: Route
   /** A `medication_dosage.id` as a string, `PERSONAL`, or empty for nothing
@@ -76,28 +80,46 @@ export const DEFAULT_WEEKLY_MG = 160
  * back out of the sig it generated.
  */
 export function initialSelection(args: {
-  from?: { weeklyMg: number; perWeek: number; route: Route } | null
+  from?: { weeklyMg: number; perWeek: number; route: Route; concentration?: number } | null
   /** Only the two strings, since the figure is re-read from `value` here — this
    *  is a starting point for an input, not a price. */
-  previous?: { value: string; sig: string; perWeek?: number; route?: Route } | null
+  previous?: {
+    value: string
+    sig: string
+    perWeek?: number
+    route?: Route
+    concentration?: number
+  } | null
+  /** Recorded gender and state, used only when nothing is on the prescription
+   *  yet. A dose change keeps `from.concentration`. */
+  patient?: { gender?: string | null; state?: string | null }
   options: DoseOption[]
 }): DoseSelection {
   const { from, previous, options } = args
+  const start = startingDose(args.patient ?? {})
 
   const previousMg = previous ? Number.parseFloat(previous.value) : NaN
   const matched = previous ? options.find((o) => o.value === previous.value) : undefined
+  const concentration = asConcentration(
+    previous?.concentration ?? from?.concentration ?? start.concentration
+  )
 
   return {
     weeklyMg: Number.isFinite(previousMg)
       ? String(previousMg)
       : from
         ? String(from.weeklyMg)
-        : String(DEFAULT_WEEKLY_MG),
+        : String(start.weeklyMg),
+    concentration,
     perWeek: previous?.perWeek ?? from?.perWeek ?? DEFAULT_PER_WEEK,
     route: previous?.route ?? from?.route ?? 'subcutaneously',
     choice: matched ? String(matched.id) : previous?.value ? PERSONAL : '',
     personal: previous && !matched ? previous.value : '',
   }
+}
+
+function asConcentration(value: number): Concentration {
+  return value === 20 || value === 50 ? value : DEFAULT_CONCENTRATION
 }
 
 /**
@@ -122,7 +144,12 @@ export function selectionValue(
 
     return {
       value: weeklyMgLabel(mg),
-      sig: injectionSig({ weeklyMg: mg, perWeek: selection.perWeek, route: selection.route }),
+      sig: injectionSig({
+        weeklyMg: mg,
+        perWeek: selection.perWeek,
+        route: selection.route,
+        concentration: selection.concentration,
+      }),
       weeklyMg: mg,
     }
   }
