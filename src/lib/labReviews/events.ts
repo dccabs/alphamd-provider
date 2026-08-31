@@ -1,6 +1,7 @@
 import 'server-only'
 
 import { ROLE, type ProviderAccess } from '@/lib/authz'
+import { lookupStaffDisplayName } from '@/lib/staffLookup'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { namesFor } from './queries'
 
@@ -68,20 +69,9 @@ function roleLabel(roles: number[]): string {
 }
 
 export async function resolveActor(access: ProviderAccess): Promise<Actor> {
-  const admin = createAdminClient()
-  const { data } = await admin
-    .from('user_list')
-    .select('first_name, last_name')
-    .eq('user_id', access.userId)
-    .maybeSingle()
-
-  const name = [data?.first_name, data?.last_name].filter(Boolean).join(' ').trim()
-
   return {
     userId: access.userId,
-    // Falling back to the email keeps the trail attributable even for an account
-    // with no `user_list` row, which is a real state for a fresh staff account.
-    displayName: name || access.email,
+    displayName: await lookupStaffDisplayName(access.userId, access.email),
     role: roleLabel(access.roles),
   }
 }
