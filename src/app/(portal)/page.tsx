@@ -5,6 +5,7 @@ import { ChevronRight } from 'lucide-react'
 import { checkProviderAccess } from '@/lib/authz'
 import { getQueueSummary } from '@/lib/labReviews/queries'
 import type { QueueRow } from '@/lib/labReviews/queueRow'
+import { PortalChrome } from '@/components/portal-chrome'
 import { QueueList } from '@/components/queue-list'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 
@@ -32,88 +33,91 @@ export default async function DashboardPage() {
   const summary = await getQueueSummary(access.access.userId)
 
   return (
-    <main className="min-h-screen bg-muted">
-      <div className="mx-auto max-w-5xl px-6 py-8">
-        <header className="flex flex-wrap items-end justify-between gap-3">
-          <div className="flex flex-col gap-1">
+    <>
+      <PortalChrome />
+      <main className="flex-1">
+        <div className="mx-auto max-w-5xl px-6 py-8">
+          <header className="flex flex-wrap items-end justify-between gap-3">
             <h1 className="text-2xl font-semibold tracking-tight">Lab reviews</h1>
-            <p className="text-sm text-muted-foreground">{access.access.email}</p>
-          </div>
-          <Link
-            href="/lab-reviews"
-            className="inline-flex items-center gap-1 text-sm font-medium underline underline-offset-4"
-          >
-            View the full queue
-            <ChevronRight className="size-3.5" />
-          </Link>
-        </header>
+            <Link
+              href="/lab-reviews"
+              className="inline-flex items-center gap-1 text-sm font-medium underline underline-offset-4"
+            >
+              View the full queue
+              <ChevronRight className="size-3.5" />
+            </Link>
+          </header>
 
-        <div className="mt-6 grid gap-4 sm:grid-cols-3">
-          <Stat
-            label="Assigned to me"
-            value={summary.mine.length}
-            href="/lab-reviews"
-            hint={summary.mine.length ? 'Yours to finish' : 'Nothing claimed'}
+          <div className="mt-6 grid gap-4 sm:grid-cols-3">
+            <Stat
+              label="Assigned to me"
+              value={summary.mine.length}
+              href="/lab-reviews"
+              hint={summary.mine.length ? 'Yours to finish' : 'Nothing claimed'}
+            />
+            <Stat
+              label="Unclaimed"
+              value={summary.unassigned.length}
+              href="/lab-reviews"
+              hint={
+                summary.assignedElsewhere
+                  ? `${summary.assignedElsewhere} with another provider`
+                  : 'Waiting for a provider'
+              }
+            />
+            <Stat
+              label="Needs attention"
+              value={summary.needsAttention}
+              href="/lab-reviews?status=needs_attention"
+              hint={summary.needsAttention ? 'Flagged for follow-up' : 'None flagged'}
+              urgent={summary.needsAttention > 0}
+            />
+          </div>
+
+          <Section
+            title="Assigned to me"
+            empty="Nothing is assigned to you. Start a review from the queue below and it becomes yours."
+            reviews={summary.mine}
           />
-          <Stat
-            label="Unclaimed"
-            value={summary.unassigned.length}
-            href="/lab-reviews"
-            hint={
-              summary.assignedElsewhere
-                ? `${summary.assignedElsewhere} with another provider`
-                : 'Waiting for a provider'
+
+          <Section
+            title="Next in the queue"
+            empty="Nothing waiting. New labs arrive here from incoming faxes and patient uploads."
+            reviews={summary.unassigned.slice(0, 8)}
+            footer={
+              summary.unassigned.length > 8
+                ? `Showing 8 of ${summary.unassigned.length} unclaimed reviews.`
+                : null
             }
           />
-          <Stat
-            label="Needs attention"
-            value={summary.needsAttention}
-            href="/lab-reviews?status=needs_attention"
-            hint={summary.needsAttention ? 'Flagged for follow-up' : 'None flagged'}
-            urgent={summary.needsAttention > 0}
-          />
         </div>
-
-        <Section
-          title="Assigned to me"
-          empty="Nothing is assigned to you. Start a review from the queue below and it becomes yours."
-          reviews={summary.mine}
-        />
-
-        <Section
-          title="Next in the queue"
-          empty="Nothing waiting. New labs arrive here from incoming faxes and patient uploads."
-          reviews={summary.unassigned.slice(0, 8)}
-          footer={
-            summary.unassigned.length > 8
-              ? `Showing 8 of ${summary.unassigned.length} unclaimed reviews.`
-              : null
-          }
-        />
-      </div>
-    </main>
+      </main>
+    </>
   )
 }
 
 function NoQueueAccess() {
   return (
-    <main className="flex min-h-screen items-center justify-center bg-muted p-6">
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <CardTitle>You&rsquo;re signed in</CardTitle>
-          <CardDescription>
-            Your account can sign in to the provider portal, but lab reviews are limited to
-            accounts with the provider or admin role.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <p className="text-sm text-muted-foreground">
-            If you should have access, ask an administrator to add the provider role to your
-            account.
-          </p>
-        </CardContent>
-      </Card>
-    </main>
+    <>
+      <PortalChrome />
+      <main className="flex flex-1 items-center justify-center p-6">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle>You&rsquo;re signed in</CardTitle>
+            <CardDescription>
+              Your account can sign in to the provider portal, but lab reviews are limited to
+              accounts with the provider or admin role.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">
+              If you should have access, ask an administrator to add the provider role to your
+              account.
+            </p>
+          </CardContent>
+        </Card>
+      </main>
+    </>
   )
 }
 

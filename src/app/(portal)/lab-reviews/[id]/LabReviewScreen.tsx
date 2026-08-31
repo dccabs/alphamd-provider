@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation'
 import { Check, ChevronLeft, MoreHorizontal, Play, TriangleAlert, UserPlus } from 'lucide-react'
 
 import { PatientStatusPill } from '@/components/patient-status'
+import { PortalChrome } from '@/components/portal-chrome'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import type { LabProviderOption, ScheduledLabOrder } from '@/lib/labOrders/queries'
@@ -258,26 +259,28 @@ export function LabReviewScreen({
     .join(' · ')
 
   return (
-    <div className="min-h-screen bg-muted">
-      <header className="flex h-13 items-center justify-between gap-4 border-b bg-card px-6 py-2.5">
-        <div className="flex min-w-0 flex-wrap items-center gap-2.5 text-[13px]">
-          <Link
-            href="/lab-reviews"
-            className="inline-flex items-center gap-1.5 font-medium text-muted-foreground hover:text-foreground"
-          >
-            <ChevronLeft className="size-3.5" />
-            Lab reviews
-          </Link>
-          <span className="text-border">/</span>
-          <span className="truncate font-semibold">{header.name}</span>
-          {queuePosition && (
-            <span className="rounded-full border bg-muted px-2.5 py-0.5 text-xs text-muted-foreground">
-              Review {queuePosition} of {queueTotal} in queue
-            </span>
-          )}
-        </div>
-        <span className="shrink-0 text-[13px] text-muted-foreground">{viewerName}</span>
-      </header>
+    <>
+      <PortalChrome
+        displayName={viewerName}
+        left={
+          <>
+            <Link
+              href="/lab-reviews"
+              className="inline-flex items-center gap-1.5 font-medium text-muted-foreground hover:text-foreground"
+            >
+              <ChevronLeft className="size-3.5" />
+              Lab reviews
+            </Link>
+            <span className="text-border">/</span>
+            <span className="truncate font-semibold">{header.name}</span>
+            {queuePosition && (
+              <span className="rounded-full border bg-muted px-2.5 py-0.5 text-xs text-muted-foreground">
+                Review {queuePosition} of {queueTotal} in queue
+              </span>
+            )}
+          </>
+        }
+      />
 
       <div className="mx-auto flex max-w-[1440px] flex-col gap-4 px-6 pt-5 pb-8">
         {/* No `overflow-hidden` here: the Assign and More-actions dropdowns are
@@ -510,6 +513,6 @@ export function LabReviewScreen({
           }}
         />
       )}
-    </div>
+    </>
   )
 }

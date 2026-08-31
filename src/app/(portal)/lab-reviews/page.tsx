@@ -10,6 +10,7 @@ import {
   type LabReviewStatus,
 } from '@/lib/labReviews/queries'
 import { AccessDenied } from '@/components/access-denied'
+import { PortalChrome } from '@/components/portal-chrome'
 import { QueueList } from '@/components/queue-list'
 import { progressOf } from '@/lib/labReviews/queueRow'
 import { PatientSearch } from './PatientSearch'
@@ -54,67 +55,70 @@ export default async function LabReviewsPage({
   const inProgressCount = reviews.filter((r) => progressOf(r) === 'in_progress').length
 
   return (
-    <main className="min-h-screen bg-muted">
-      <div className="mx-auto max-w-5xl px-6 py-8">
-        <header className="flex flex-col gap-1">
-          <h1 className="text-2xl font-semibold tracking-tight">Lab reviews</h1>
-          <p className="text-sm text-muted-foreground">
-            {patientId
-              ? 'All reviews for this patient, newest first.'
-              : 'Labs waiting on a provider, newest first.'}
-          </p>
-        </header>
+    <>
+      <PortalChrome />
+      <main className="flex-1">
+        <div className="mx-auto max-w-5xl px-6 py-8">
+          <header className="flex flex-col gap-1">
+            <h1 className="text-2xl font-semibold tracking-tight">Lab reviews</h1>
+            <p className="text-sm text-muted-foreground">
+              {patientId
+                ? 'All reviews for this patient, newest first.'
+                : 'Labs waiting on a provider, newest first.'}
+            </p>
+          </header>
 
-        <div className="mt-6">
-          <PatientSearch
-            key={selectedPatient?.patientId ?? 'none'}
-            selected={selectedPatient}
-          />
-        </div>
-
-        {!patientId && (
-          <nav className="mt-6 flex gap-1 border-b" aria-label="Review status">
-            {STATUS_TABS.map((tab) => {
-              const isCurrent = tab.id === status
-              return (
-                <Link
-                  key={tab.id}
-                  href={tab.id === 'active' ? '/lab-reviews' : `/lab-reviews?status=${tab.id}`}
-                  aria-current={isCurrent ? 'page' : undefined}
-                  className={
-                    isCurrent
-                      ? 'border-b-2 border-foreground px-3 py-2 text-sm font-medium'
-                      : 'border-b-2 border-transparent px-3 py-2 text-sm font-medium text-muted-foreground hover:text-foreground'
-                  }
-                >
-                  {tab.label}
-                </Link>
-              )
-            })}
-          </nav>
-        )}
-
-        {reviews.length === 0 ? (
-          <p className="mt-10 text-center text-sm text-muted-foreground">
-            {patientId ? 'No lab reviews for this patient.' : EMPTY_COPY[status]}
-          </p>
-        ) : (
-          <div className="mt-4">
-            <QueueList reviews={reviews} numbered={!patientId} />
+          <div className="mt-6">
+            <PatientSearch
+              key={selectedPatient?.patientId ?? 'none'}
+              selected={selectedPatient}
+            />
           </div>
-        )}
 
-        <p className="mt-4 text-xs text-muted-foreground">
-          {[
-            `${reviews.length} ${reviews.length === 1 ? 'review' : 'reviews'}`,
-            patientId ? null : STATUS_TABS.find((t) => t.id === status)?.label.toLowerCase(),
-            inProgressCount ? `${inProgressCount} in progress` : null,
-          ]
-            .filter(Boolean)
-            .join(' · ')}
-        </p>
-      </div>
-    </main>
+          {!patientId && (
+            <nav className="mt-6 flex gap-1 border-b" aria-label="Review status">
+              {STATUS_TABS.map((tab) => {
+                const isCurrent = tab.id === status
+                return (
+                  <Link
+                    key={tab.id}
+                    href={tab.id === 'active' ? '/lab-reviews' : `/lab-reviews?status=${tab.id}`}
+                    aria-current={isCurrent ? 'page' : undefined}
+                    className={
+                      isCurrent
+                        ? 'border-b-2 border-foreground px-3 py-2 text-sm font-medium'
+                        : 'border-b-2 border-transparent px-3 py-2 text-sm font-medium text-muted-foreground hover:text-foreground'
+                    }
+                  >
+                    {tab.label}
+                  </Link>
+                )
+              })}
+            </nav>
+          )}
+
+          {reviews.length === 0 ? (
+            <p className="mt-10 text-center text-sm text-muted-foreground">
+              {patientId ? 'No lab reviews for this patient.' : EMPTY_COPY[status]}
+            </p>
+          ) : (
+            <div className="mt-4">
+              <QueueList reviews={reviews} numbered={!patientId} />
+            </div>
+          )}
+
+          <p className="mt-4 text-xs text-muted-foreground">
+            {[
+              `${reviews.length} ${reviews.length === 1 ? 'review' : 'reviews'}`,
+              patientId ? null : STATUS_TABS.find((t) => t.id === status)?.label.toLowerCase(),
+              inProgressCount ? `${inProgressCount} in progress` : null,
+            ]
+              .filter(Boolean)
+              .join(' · ')}
+          </p>
+        </div>
+      </main>
+    </>
   )
 }
 
