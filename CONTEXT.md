@@ -67,3 +67,11 @@ _Avoid_: Strength, dose (that is Weekly dose), vial size (how much the pharmacy 
 **Weekly dose**:
 Milligrams of testosterone a Patient takes in a week. The figure a dose change is decided in.
 _Avoid_: Amount (the pricing modal's word), concentration
+
+**Analyte**:
+One extracted lab value on a Lab Review: a name and the display string from the report.
+_Avoid_: Chip, result (when this extracted row is meant)
+
+**Clinic flag**:
+A yellow or red highlight on an Analyte when its value crosses an AlphaMD threshold. A prompt for the Provider to look, not a Disposition.
+_Avoid_: Needs attention, abnormal, high, alert, reference range

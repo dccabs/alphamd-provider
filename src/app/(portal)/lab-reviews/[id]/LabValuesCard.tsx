@@ -2,6 +2,7 @@
 
 import { Button } from '@/components/ui/button'
 import type { Analyte } from '@/lib/labReviews/analytes'
+import { clinicFlag, type ClinicFlag } from '@/lib/labReviews/clinicFlags'
 
 /**
  * The numbers on the document below it.
@@ -15,11 +16,15 @@ import type { Analyte } from '@/lib/labReviews/analytes'
  * its own collection alongside the panel it followed — and putting an older one
  * on screen next to the current numbers invites reading a stale value as today's.
  *
- * There are still no arrows, colours or high/low flags: the stored JSON is
- * display strings with no reference interval, and no reference-range table exists
- * anywhere in the database, so any threshold here would be invented in front-end
- * code. See README, "Not yet wired to real data".
+ * Clinic flags are painted here from the AlphaMD config list, not from a range
+ * on the report — see `clinicFlags.ts` and ADR 0004.
  */
+
+const FLAG_SURFACE: Record<ClinicFlag, string> = {
+  yellow: 'bg-yellow-100',
+  red: 'bg-red-100',
+}
+
 export function LabValuesCard({
   analytes,
   collectionDate,
@@ -58,17 +63,23 @@ export function LabValuesCard({
       <div className="px-4 pt-2 pb-3">
         {analytes.length ? (
           <>
+            <ClinicFlagLegend />
             <dl className="grid grid-cols-2 gap-x-6 gap-y-1.5 sm:grid-cols-3 lg:grid-cols-4">
-              {analytes.map((a) => (
-                <div key={a.name} className="flex items-baseline justify-between gap-2 border-b py-1">
-                  <dt className="truncate text-xs text-muted-foreground">{a.name}</dt>
-                  <dd className="shrink-0 text-[13px] font-semibold tabular-nums">{a.value}</dd>
-                </div>
-              ))}
+              {analytes.map((a) => {
+                const flag = clinicFlag(a.name, a.value)
+                return (
+                  <div
+                    key={a.name}
+                    className={`flex items-baseline justify-between gap-2 border-b px-1.5 py-1 ${flag ? FLAG_SURFACE[flag] : ''}`}
+                  >
+                    <dt className="truncate text-xs text-muted-foreground">{a.name}</dt>
+                    <dd className="shrink-0 text-[13px] font-semibold tabular-nums">{a.value}</dd>
+                  </div>
+                )
+              })}
             </dl>
             <p className="mt-2 text-xs text-muted-foreground">
-              Extracted from the uploaded report — check a value against the document before acting
-              on it. Analytes the extractor did not find are not listed.
+              Analytes the extractor did not find are not listed.
             </p>
           </>
         ) : (
@@ -94,6 +105,22 @@ export function LabValuesCard({
         </div>
       )}
     </div>
+  )
+}
+
+function ClinicFlagLegend() {
+  return (
+    <p className="mb-2 flex flex-wrap items-baseline gap-x-3 gap-y-1 text-xs text-muted-foreground">
+      <span className="inline-flex items-baseline gap-1.5">
+        <span className="inline-block size-2.5 shrink-0 translate-y-px bg-yellow-100 ring-1 ring-yellow-300" />
+        Yellow = approaching a clinic threshold.
+      </span>
+      <span className="inline-flex items-baseline gap-1.5">
+        <span className="inline-block size-2.5 shrink-0 translate-y-px bg-red-100 ring-1 ring-red-300" />
+        Red = at or past it.
+      </span>
+      <span>AI-detected — please confirm on the lab document.</span>
+    </p>
   )
 }
 
