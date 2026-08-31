@@ -121,6 +121,10 @@ test('the meta line drops what is missing rather than rendering a dash', () => {
 
 test('sources read as the words the queue used before', () => {
   assert.equal(sourceLabel(['incoming_fax', 'patient_upload']), 'Fax + Upload')
+  assert.equal(sourceLabel(['admin_upload']), 'Upload')
+  assert.equal(sourceLabel(['incoming_fax', 'admin_upload']), 'Fax + Upload')
+  // The queue sorts kinds alphabetically, so admin_upload arrives first.
+  assert.equal(sourceLabel(['admin_upload', 'incoming_fax']), 'Fax + Upload')
   assert.equal(sourceLabel(['something_new']), 'something_new')
   assert.equal(sourceLabel([]), null)
 })

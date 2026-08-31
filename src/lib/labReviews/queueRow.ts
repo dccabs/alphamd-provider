@@ -13,6 +13,7 @@ import { relativeAge, shortDate } from './format.ts'
 const SOURCE_LABELS: Record<string, string> = {
   incoming_fax: 'Fax',
   patient_upload: 'Upload',
+  admin_upload: 'Upload',
 }
 
 export type QueueRow = {
@@ -60,7 +61,21 @@ export function progressOf(
 /** "Fax + Upload", or null when a review has no source rows. */
 export function sourceLabel(sourceKinds: string[]): string | null {
   if (!sourceKinds.length) return null
-  return sourceKinds.map((kind) => SOURCE_LABELS[kind] ?? kind).join(' + ')
+  const mapped = sourceKinds.map((kind) => SOURCE_LABELS[kind] ?? kind)
+  const labels: string[] = []
+  const seen = new Set<string>()
+  for (const preferred of ['Fax', 'Upload']) {
+    if (mapped.includes(preferred)) {
+      labels.push(preferred)
+      seen.add(preferred)
+    }
+  }
+  for (const label of mapped) {
+    if (seen.has(label)) continue
+    labels.push(label)
+    seen.add(label)
+  }
+  return labels.join(' + ')
 }
 
 /**
