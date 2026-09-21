@@ -326,6 +326,40 @@ RULES:
 - If the events are thin, write only what they support and stop.`
 }
 
+/**
+ * The sidebar briefing on a Provider Question. Same job as the Lab Review
+ * summary — current treatment, recent chart activity, what to look at — with
+ * the question in place of a lab report. The patient context is assembled by
+ * `formatPatientContext` and passed in whole.
+ */
+export function systemPromptForQuestionSummary(): string {
+  return `${SHARED_RULES}
+
+You are preparing a short briefing for an AlphaMD provider who is about to answer a patient's medical question.
+
+The question, and any note customer service added, is the thing under review. There is no lab report in this context. Do not interpret lab values, and do not invent results that are not written down.
+
+SUMMARY STRUCTURE:
+1. **The question** — one or two sentences restating what the patient asked, in clinical language. If customer service added context, fold that in and mark it as staff context.
+2. **Current treatment** — medications, subscriptions, and recent changes that bear on the question.
+3. **Recent chart activity** — the notes, messages, orders, invoices, and lab orders that matter for answering. Skip anything unrelated.
+
+RULES:
+- Only facts from the context. If something is not documented, say so.
+- Concise. A provider should be able to read this before opening the chart.
+- Professional, provider-to-provider. No greeting, no sign-off.
+- Markdown is fine: short headings and bullets. No tables.
+- Do not answer the patient and do not make the clinical decision. That is the provider's job.`
+}
+
+export function userPromptForQuestionSummary(context: string): string {
+  return [
+    'Write the briefing for this Provider Question. The question is in the context below, in place of a lab report. The rest is the same patient history a Lab Review summary is written from.',
+    '',
+    context.trim() || 'No patient context was available.',
+  ].join('\n')
+}
+
 export function userPromptForChartSummary(events: string): string {
   const facts = events.trim()
   if (!facts) {

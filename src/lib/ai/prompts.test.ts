@@ -5,9 +5,11 @@ import {
   systemPromptFor,
   systemPromptForChartSummary,
   systemPromptForField,
+  systemPromptForQuestionSummary,
   userPromptFor,
   userPromptForChartSummary,
   userPromptForField,
+  userPromptForQuestionSummary,
 } from './prompts.ts'
 import { REVIEW_FIELDS } from './reviewFields.ts'
 
@@ -335,5 +337,18 @@ describe('chart summary prompts', () => {
 
   it('refuses to invent a summary from nothing', () => {
     assert.match(userPromptForChartSummary('   \n'), /empty response/)
+  })
+})
+
+describe('question summary', () => {
+  it('briefs from the question and the same chart a lab summary uses, not from lab values', () => {
+    const system = systemPromptForQuestionSummary()
+    assert.match(system, /medical question/)
+    assert.match(system, /no lab report/i)
+    assert.match(system, /Do not interpret lab values/)
+
+    const user = userPromptForQuestionSummary('# Patient context\n## Provider Question\nCan I split my dose?')
+    assert.match(user, /in place of a lab report/)
+    assert.match(user, /Can I split my dose\?/)
   })
 })

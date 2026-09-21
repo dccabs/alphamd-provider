@@ -1,6 +1,6 @@
 'use client'
 
-import { useActionState, useMemo, useState } from 'react'
+import { useActionState, useMemo, useState, type ReactNode } from 'react'
 import { useFormStatus } from 'react-dom'
 import { CornerDownLeft, EyeOff, Paperclip, Send } from 'lucide-react'
 
@@ -60,10 +60,15 @@ export function DetailTabs({
   reviewNotes,
   shownFileId,
   onShowFile,
+  activityTitle = TAB_TITLES.activity,
+  aiPanel,
 }: {
   /** Carried down to the reply composer, whose AI assist resolves the patient
-   *  from the review rather than being handed a patient id. */
+   *  from the review rather than being handed a patient id. A Provider Question
+   *  id works here too — see `lib/workSubject.ts`. */
   reviewId: string
+  /** The History tab's heading. A Provider Question is not a review. */
+  activityTitle?: string
   notes: Note[]
   summaryBlocks: Block[]
   summaryGeneratedAt: string | null
@@ -73,6 +78,8 @@ export function DetailTabs({
   reviewNotes: LabReviewNote[]
   shownFileId: number | null
   onShowFile: (file: PatientFile) => void
+  /** Replaces the stored Lab Review summary. A Provider Question writes one live. */
+  aiPanel?: ReactNode
 }) {
   const [tab, setTab] = useState<TabId>('ai')
   const [noteFilter, setNoteFilter] = useState<NoteFilter>('provider')
@@ -142,14 +149,15 @@ export function DetailTabs({
             ))}
           </div>
         ) : (
-          <span className="text-[13px] font-semibold">{TAB_TITLES[tab]}</span>
+          <span className="text-[13px] font-semibold">
+            {tab === 'activity' ? activityTitle : TAB_TITLES[tab]}
+          </span>
         )}
       </div>
 
       <div className="h-[632px] overflow-y-auto xl:h-auto xl:min-h-0 xl:flex-1">
-        {tab === 'ai' && (
-          <AiTab blocks={summaryBlocks} generatedAt={summaryGeneratedAt} />
-        )}
+        {tab === 'ai' &&
+          (aiPanel ?? <AiTab blocks={summaryBlocks} generatedAt={summaryGeneratedAt} />)}
         {tab === 'notes' && <NotesList notes={visibleNotes} filter={noteFilter} />}
         {tab === 'files' && (
           <FilesList files={files} shownFileId={shownFileId} onShowFile={onShowFile} />

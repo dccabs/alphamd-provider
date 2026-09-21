@@ -5,7 +5,9 @@ import { ChevronRight } from 'lucide-react'
 import { checkProviderAccess } from '@/lib/authz'
 import { getQueueSummary } from '@/lib/labReviews/queries'
 import type { QueueRow } from '@/lib/labReviews/queueRow'
+import { getPileSummary } from '@/lib/providerQuestions/queries'
 import { PortalChrome } from '@/components/portal-chrome'
+import { QuestionList } from '@/components/question-list'
 import { QueueList } from '@/components/queue-list'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 
@@ -30,7 +32,10 @@ export default async function DashboardPage() {
     return <NoQueueAccess />
   }
 
-  const summary = await getQueueSummary(access.access.userId)
+  const [summary, pile] = await Promise.all([
+    getQueueSummary(access.access.userId),
+    getPileSummary(access.access.userId),
+  ])
 
   return (
     <>
@@ -90,6 +95,60 @@ export default async function DashboardPage() {
                 : null
             }
           />
+
+          <header className="mt-12 flex flex-wrap items-end justify-between gap-3">
+            <h1 className="text-2xl font-semibold tracking-tight">Provider Questions</h1>
+            <Link
+              href="/provider-questions"
+              className="inline-flex items-center gap-1 text-sm font-medium underline underline-offset-4"
+            >
+              View the pile
+              <ChevronRight className="size-3.5" />
+            </Link>
+          </header>
+
+          <div className="mt-6 grid gap-4 sm:grid-cols-3">
+            <Stat
+              label="Mine"
+              value={pile.mine.length}
+              href="/provider-questions"
+              hint={pile.mine.length ? 'Yours to answer' : 'Nothing taken'}
+            />
+            <Stat
+              label="Queued"
+              value={pile.queued.length}
+              href="/provider-questions"
+              hint={
+                pile.withOthers
+                  ? `${pile.withOthers} with another provider`
+                  : 'Waiting for a provider'
+              }
+            />
+            <Stat
+              label="Urgent"
+              value={pile.urgent}
+              href="/provider-questions"
+              hint={pile.urgent ? 'Marked by staff or a provider' : 'None marked'}
+              urgent={pile.urgent > 0}
+            />
+          </div>
+
+          <section className="mt-8">
+            <h2 className="text-sm font-semibold">Next on the pile</h2>
+            {pile.mine.length + pile.queued.length === 0 ? (
+              <p className="mt-3 rounded-xl border bg-card px-5 py-6 text-center text-sm text-muted-foreground">
+                Nothing waiting. Customer service creates Provider Questions from the patient
+                page or a Zendesk ticket.
+              </p>
+            ) : (
+              <div className="mt-3">
+                <QuestionList
+                  questions={[...pile.mine, ...pile.queued].slice(0, 8)}
+                  viewerId={access.access.userId}
+                />
+              </div>
+            )}
+          </section>
         </div>
       </main>
     </>

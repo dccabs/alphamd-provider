@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { Check, Loader2 } from 'lucide-react'
 import Link from 'next/link'
 
@@ -26,6 +26,7 @@ import { shortDate } from '@/lib/labReviews/format'
 import { describeDecision } from '@/lib/ai/decision'
 import { DISPOSITION_LABELS, type ReviewDraft } from '@/lib/labReviews/reviewDraft'
 import { FieldAssistButton } from './FieldAssistButton'
+import { useChartSummary } from './useChartSummary'
 import { REPLY_IDENTITY_LABELS, type ReplyIdentity } from '@/lib/labReviews/replyIdentity'
 import {
   applyLabReviewFollowUpAction,
@@ -615,88 +616,6 @@ export function FinalizeSummaryDialog({
       </DialogContent>
     </Dialog>
   )
-}
-
-function useChartSummary({
-  events,
-  existing,
-  enabled,
-  onReady,
-}: {
-  events: string
-  existing: string
-  enabled: boolean
-  onReady: (text: string) => void
-}) {
-  const [streaming, setStreaming] = useState('')
-  const [status, setStatus] = useState<'idle' | 'generating' | 'error'>('idle')
-  const [error, setError] = useState<string | null>(null)
-  const abort = useRef<AbortController | null>(null)
-  const autoStarted = useRef(false)
-
-  const generate = useCallback(async () => {
-    abort.current?.abort()
-    const controller = new AbortController()
-    abort.current = controller
-    setStatus('generating')
-    setStreaming('')
-    setError(null)
-
-    try {
-      const response = await fetch('/api/ai/draft', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ kind: 'chartSummary', events }),
-        signal: controller.signal,
-      })
-
-      if (!response.ok || !response.body) {
-        const message = (await response.text().catch(() => '')) || 'The assistant failed.'
-        setError(message)
-        setStatus('error')
-        return
-      }
-
-      const reader = response.body.getReader()
-      const decoder = new TextDecoder()
-      let text = ''
-
-      for (;;) {
-        const { done, value } = await reader.read()
-        if (done) break
-        text += decoder.decode(value, { stream: true })
-        setStreaming(text)
-      }
-
-      const next = text.trim()
-      if (!next) {
-        setError('The assistant returned nothing.')
-        setStatus('error')
-        return
-      }
-
-      onReady(next)
-      setStatus('idle')
-    } catch (cause) {
-      if (controller.signal.aborted) return
-      console.error('[FinalizeSummaryDialog]', cause)
-      setError('The assistant could not be reached.')
-      setStatus('error')
-    } finally {
-      if (abort.current === controller) abort.current = null
-    }
-  }, [events, onReady])
-
-  useEffect(() => {
-    if (!enabled || !events.trim()) return
-    if (existing.trim() || autoStarted.current) return
-    autoStarted.current = true
-    void generate()
-  }, [enabled, events, existing, generate])
-
-  useEffect(() => () => abort.current?.abort(), [])
-
-  return { status, streaming, error, generate }
 }
 
 function ChartRecords({

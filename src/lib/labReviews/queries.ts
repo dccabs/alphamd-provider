@@ -155,7 +155,7 @@ function fullName(row: NameRow | undefined, fallback = 'Unknown patient'): strin
   return name || fallback
 }
 
-async function contactsFor(
+export async function contactsFor(
   userIds: string[],
   fallback = 'Unknown patient'
 ): Promise<Map<string, Contact>> {
@@ -366,7 +366,7 @@ export async function getQueueSummary(viewerId: string): Promise<QueueSummary> {
 
 /** Active flag names per patient. `user_flags`/`user_flags_join` have no RLS,
  *  but they are read here through the same client for consistency. */
-async function listFlagsFor(patientIds: string[]): Promise<Map<string, string[]>> {
+export async function listFlagsFor(patientIds: string[]): Promise<Map<string, string[]>> {
   const unique = [...new Set(patientIds.filter(Boolean))]
   if (!unique.length) return new Map()
 
@@ -406,7 +406,7 @@ function statusIdOf(value: unknown): number | null {
  * Not a PostgREST embed because `user_list.status` is text with no foreign key
  * to `user_statuses`, so the join has to happen here.
  */
-async function listPatientStatuses(patientIds: string[]): Promise<Map<string, string>> {
+export async function listPatientStatuses(patientIds: string[]): Promise<Map<string, string>> {
   const unique = [...new Set(patientIds.filter(Boolean))]
   if (!unique.length) return new Map()
 

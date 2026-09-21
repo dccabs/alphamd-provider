@@ -1,6 +1,7 @@
 import 'server-only'
 
 import type { ProviderAccess } from '@/lib/authz'
+import { createCustomerServiceAction } from '@/lib/patients/csAction'
 import { addPatientFlag } from '@/lib/patients/flags'
 import { planProtocolFor } from '@/lib/protocols/mutations'
 import { protocolOutcome } from '@/lib/protocols/protocolPlan'
@@ -128,63 +129,28 @@ export async function applyLabReviewFollowUp(
   }
 }
 
+/** The shared insert, then the Lab Review's own link column. */
 async function createCsAction(
   access: ProviderAccess,
   input: { reviewId: string; patientId: string; title: string; description: string }
 ): Promise<
   { ok: true; actionId: string; warning?: string } | { ok: false; error: string }
 > {
+  const created = await createCustomerServiceAction(access, input)
+  if (!created.ok) return created
+
   const admin = createAdminClient()
-
-  const [statusRow, priorityRow, csRole] = await Promise.all([
-    admin.from('actions_statuses').select('id').eq('name', 'New').maybeSingle(),
-    admin.from('actions_priorities').select('id').eq('name', 'Normal').maybeSingle(),
-    admin.from('user_roles').select('id').eq('role', 'customer_service').maybeSingle(),
-  ])
-
-  const statusId = statusRow.data?.id
-  const priorityId = priorityRow.data?.id
-  const groupId = csRole.data?.id
-
-  if (!statusId || !priorityId || !groupId) {
-    return {
-      ok: false,
-      error: 'the customer service action could not be created (status, priority or group missing)',
-    }
-  }
-
-  const { data: action, error: actionError } = await admin
-    .from('actions')
-    .insert({
-      title: input.title,
-      description: input.description,
-      patient_user_id: input.patientId,
-      created_by_user_id: access.userId,
-      assignee_group_id: Number(groupId),
-      status_id: statusId,
-      priority_id: priorityId,
-    })
-    .select('id')
-    .maybeSingle()
-
-  if (actionError || !action) {
-    return {
-      ok: false,
-      error: `the customer service action could not be created (${actionError?.message ?? 'unknown'})`,
-    }
-  }
-
   const { error: linkError } = await admin
     .from('lab_reviews')
-    .update({ cs_action_id: action.id, updated_at: new Date().toISOString() })
+    .update({ cs_action_id: created.actionId, updated_at: new Date().toISOString() })
     .eq('id', input.reviewId)
   if (linkError) {
     return {
       ok: true,
-      actionId: action.id as string,
+      actionId: created.actionId,
       warning: 'the customer service action was created but is not linked to this review',
     }
   }
 
-  return { ok: true, actionId: action.id as string }
+  return { ok: true, actionId: created.actionId }
 }

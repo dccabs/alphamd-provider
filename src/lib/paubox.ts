@@ -16,7 +16,7 @@ import 'server-only'
 export type PauboxResult = { ok: true } | { ok: false; error: string }
 
 export function pauboxConfigured(): boolean {
-  return Boolean(process.env.PAUBOX_API_USERNAME && process.env.PAUBOX_API_KEY)
+  return Boolean(process.env.PAUBOX_API_KEY)
 }
 
 /** `AlphaMD <noreply@alphamd.org>` → `noreply@alphamd.org`, which is what the API
@@ -34,10 +34,9 @@ export async function sendPauboxEmail(options: {
   text: string
   html?: string
 }): Promise<PauboxResult> {
-  const apiUsername = process.env.PAUBOX_API_USERNAME
   const apiKey = process.env.PAUBOX_API_KEY
 
-  if (!apiUsername || !apiKey) {
+  if (!apiKey) {
     return { ok: false, error: 'Email is not configured in this environment.' }
   }
 
@@ -48,9 +47,7 @@ export async function sendPauboxEmail(options: {
         headers: { subject: options.subject, from: bareAddress(options.from) },
         content: {
           'text/plain': options.text,
-          ...(options.html
-            ? { 'text/html': Buffer.from(options.html).toString('base64') }
-            : {}),
+          ...(options.html ? { 'text/html': options.html } : {}),
         },
         allowNonTLS: false,
         forceSecureNotification: false,
@@ -60,9 +57,9 @@ export async function sendPauboxEmail(options: {
 
   let response: Response
   try {
-    response = await fetch(`https://api.paubox.net/v1/${apiUsername}/messages`, {
+    response = await fetch('https://api.paubox.com/v1/email/messages', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Token token=${apiKey}` },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
       body: JSON.stringify(body),
     })
   } catch (error) {
