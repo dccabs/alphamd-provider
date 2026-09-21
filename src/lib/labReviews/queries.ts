@@ -329,41 +329,6 @@ export async function searchPatientsForQueue(query: string): Promise<PatientSugg
   return searchPatients(people, query)
 }
 
-export type QueueSummary = {
-  /** Active and needs-attention reviews this provider owns, newest first. */
-  mine: QueueRow[]
-  /** Active reviews nobody has claimed. */
-  unassigned: QueueRow[]
-  /** Claimed by somebody else — a count only; another provider's workload is
-   *  not this screen's business beyond knowing the queue is being worked. */
-  assignedElsewhere: number
-  needsAttention: number
-}
-
-/**
- * The landing page's view of the queue.
- *
- * Deliberately derived from the same `listLabReviews` the queue page uses
- * rather than its own aggregate query, so the dashboard can never disagree
- * with the list it links to. The queue is small — 55 rows in production — so
- * two full reads cost less than the risk of two orderings drifting apart.
- */
-export async function getQueueSummary(viewerId: string): Promise<QueueSummary> {
-  const [active, needsAttention] = await Promise.all([
-    listLabReviews('active'),
-    listLabReviews('needs_attention'),
-  ])
-
-  const mineFrom = (rows: QueueRow[]) => rows.filter((r) => r.assignedTo === viewerId)
-
-  return {
-    mine: [...mineFrom(needsAttention), ...mineFrom(active)],
-    unassigned: active.filter((r) => !r.assignedTo),
-    assignedElsewhere: active.filter((r) => r.assignedTo && r.assignedTo !== viewerId).length,
-    needsAttention: needsAttention.length,
-  }
-}
-
 /** Active flag names per patient. `user_flags`/`user_flags_join` have no RLS,
  *  but they are read here through the same client for consistency. */
 export async function listFlagsFor(patientIds: string[]): Promise<Map<string, string[]>> {

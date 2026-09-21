@@ -4,7 +4,6 @@ import { contactsFor, listFlagsFor, listPatientStatuses } from '@/lib/labReviews
 import { createAdminClient } from '@/lib/supabase/admin'
 import { parseAnswerDraft, type AnswerDraft } from './answerDraft'
 import {
-  isOpen,
   isProviderQuestionStatus,
   type ProviderQuestionRow,
   type ProviderQuestionStatus,
@@ -219,28 +218,5 @@ export async function getProviderQuestion(id: string): Promise<ProviderQuestionD
     createdByName: creator.get(db.created_by)?.name ?? null,
     draft: parseAnswerDraft(db.draft),
     draftUpdatedAt: db.draft_updated_at,
-  }
-}
-
-export type PileSummary = {
-  /** Open questions this provider has. */
-  mine: ProviderQuestionRow[]
-  /** Queued, nobody has them. */
-  queued: ProviderQuestionRow[]
-  /** In progress with someone else. */
-  withOthers: number
-  urgent: number
-}
-
-/** The dashboard's view of the pile, derived from the same list the pile page
- *  shows so the two cannot disagree. */
-export async function getPileSummary(viewerId: string): Promise<PileSummary> {
-  const open = await listOpenProviderQuestions()
-
-  return {
-    mine: open.filter((q) => q.assignedTo === viewerId),
-    queued: open.filter((q) => q.status === 'queued'),
-    withOthers: open.filter((q) => q.assignedTo && q.assignedTo !== viewerId).length,
-    urgent: open.filter((q) => q.urgent && isOpen(q)).length,
   }
 }

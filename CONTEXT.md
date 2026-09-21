@@ -107,3 +107,19 @@ _Avoid_: Disposition, reply (when you mean the whole finish)
 **Provider Question Note**:
 The chart note written when a Provider Question is finished. AI summarizes what the Provider did. Staff open the Finished row from it in the admin app; the patient never sees it.
 _Avoid_: Lab Review finish note, patient Zendesk message
+
+## Dashboard
+
+The landing page after sign-in. Three things in priority order — Lab reviews, Provider Questions, Consultations — plus the Provider's Actions.
+
+**Assigned to me**:
+The dashboard's switch on a work list: the rows where the signed-in Provider is the assignee, against **All**, the whole queue or pile. A switch over the same list, not a separate list.
+_Avoid_: Mine (as a heading), my queue
+
+**Consultation**:
+A booked call between a Provider and a Patient, from `user_consultation_schedules`. The dashboard shows the Provider's own for one day at a time, today or later, with a Join link. Consultations are booked and run through the admin app and Calendly; this portal only shows them.
+_Avoid_: Appointment (the admin app's word), meeting, event (the Calendly row)
+
+**Action**:
+A task on the admin app's Actions board (`actions`). This portal creates them when a Provider asks customer service for something, and the dashboard shows the ones assigned to the Provider; they are worked in the admin app.
+_Avoid_: Task, to-do, ticket
