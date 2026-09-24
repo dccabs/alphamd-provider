@@ -4,14 +4,14 @@
  * Pure, so the needs-attention panel and the server action validate
  * identically and the rules are testable without a database.
  *
- * A park needs a note. Targets are optional: none means the assigned provider
- * is coming back to it, and nobody else is involved. Customer service never
- * owns a lab review — escalating to CS creates a task for them and flags the
- * patient, but the review stays assigned, because CS cannot make the clinical
- * decision that closes it. Only the provider route changes who holds it.
+ * A park needs a note. The target is optional: none means the assigned provider
+ * is coming back to it, and nobody else is involved. Customer service is never a
+ * target: nothing reaches CS until a review is finalized, and then only through
+ * the flags it raises. Older rows may still record `customer_service`; parsing
+ * drops it.
  */
 
-export const ESCALATION_TARGETS = ['customer_service', 'provider'] as const
+export const ESCALATION_TARGETS = ['provider'] as const
 
 export type EscalationTarget = (typeof ESCALATION_TARGETS)[number]
 
@@ -20,12 +20,10 @@ export function isEscalationTarget(value: unknown): value is EscalationTarget {
 }
 
 export const ESCALATION_TARGET_LABELS: Record<EscalationTarget, string> = {
-  customer_service: 'Customer service',
   provider: 'Another provider',
 }
 
 export const ESCALATION_TARGET_HINTS: Record<EscalationTarget, string> = {
-  customer_service: 'Creates a task for CS and flags the patient. The review stays yours.',
   provider: 'Hands the review over. They become responsible for finishing it.',
 }
 
@@ -38,10 +36,10 @@ export type Escalation = {
   toProviderId: string | null
 }
 
-/** Shown under the target checkboxes so leaving both unchecked is a real choice,
- *  not a half-filled form. */
+/** Shown under the target checkbox so leaving it unchecked is a real choice, not
+ *  a half-filled form. */
 export const SELF_PARK_HINT =
-  'Leave both unchecked to keep the review and park it for yourself.'
+  'Leave it unchecked to keep the review and park it for yourself. If customer service needs to do something, finalize the review and say so there.'
 
 export const EMPTY_ESCALATION: Escalation = {
   targets: [],
@@ -68,8 +66,8 @@ export function validateEscalation(escalation: Escalation): string[] {
   return problems
 }
 
-/** True when the escalation changes who holds the review. Escalating to customer
- *  service alone does not, and neither does parking it for yourself. */
+/** True when the escalation changes who holds the review. Parking it for
+ *  yourself does not. */
 export function transfersOwnership(escalation: Escalation): boolean {
   return escalation.targets.includes('provider')
 }

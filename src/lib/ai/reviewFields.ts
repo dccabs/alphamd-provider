@@ -25,7 +25,7 @@ export function isReviewField(value: unknown): value is ReviewField {
 export const FIELD_LABELS: Record<ReviewField, string> = {
   providerNote: 'Note for the chart',
   patientMessage: 'Message for patient',
-  csInstructions: 'Instructions for customer service',
+  csInstructions: 'Customer service follow-up',
 }
 
 /**
@@ -38,7 +38,7 @@ export const FIELD_LABELS: Record<ReviewField, string> = {
 export const FIELD_STEER_PLACEHOLDERS: Record<ReviewField, string> = {
   providerNote: 'e.g. lowered T for rising hct, everything else stable, recheck in 8wks',
   patientMessage: 'e.g. reassure him, the new dose is nothing to worry about',
-  csInstructions: 'e.g. update the shipment to the new dose and book the 8 week draw',
+  csInstructions: 'e.g. ask him to reupload the report with his name and DOB on it',
 }
 
 /**

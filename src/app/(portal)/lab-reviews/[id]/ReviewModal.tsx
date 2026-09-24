@@ -512,10 +512,27 @@ export function ReviewModal({
             <Label htmlFor="cs-instructions" className="sr-only">
               {STEP_TITLES.csInstructions}
             </Label>
+            <div id="cs-instructions-hint" className="mb-2 flex flex-col gap-1 text-xs text-muted-foreground">
+              <p className="font-medium text-foreground">
+                Only for something customer service has to follow up on. Anything
+                written here flags the patient for CS.
+              </p>
+              <p>
+                Just informational? Put it in the chart note instead — do not put it
+                here.
+              </p>
+              <p>
+                Only needed if the patient has not been emailed directly with
+                instructions. Telling the patient yourself in the patient message is
+                the best and fastest way; do not ask CS to pass it on.
+              </p>
+              <p>Dose changes and protocols that could not be priced are flagged for CS automatically.</p>
+            </div>
             <DictationTextarea
               id="cs-instructions"
+              aria-describedby="cs-instructions-hint"
               rows={4}
-              placeholder="What CS should relay or handle (shipment changes, scheduling, patient outreach)…"
+              placeholder="e.g. Ask the patient to upload a compliant lab report (name, DOB and ordering provider)."
               value={draft.csInstructions}
               onValueChange={(csInstructions) => update({ csInstructions })}
             />

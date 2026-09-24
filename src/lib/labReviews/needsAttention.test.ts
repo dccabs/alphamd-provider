@@ -19,12 +19,16 @@ const escalation = (patch: Partial<Escalation> = {}): Escalation => ({
   ...patch,
 })
 
-test('the two targets are recognised and nothing else is', () => {
-  assert.ok(isEscalationTarget('customer_service'))
+test('another provider is the only target', () => {
   assert.ok(isEscalationTarget('provider'))
   assert.equal(isEscalationTarget('director'), false)
   assert.equal(isEscalationTarget(7), false)
   assert.equal(isEscalationTarget(undefined), false)
+})
+
+test('customer service is not a target, even from an older draft', () => {
+  assert.equal(isEscalationTarget('customer_service'), false)
+  assert.deepEqual(parseTargets(['customer_service', 'provider']), ['provider'])
 })
 
 test('a target list from the browser is filtered and deduplicated', () => {
@@ -43,17 +47,8 @@ test('a note with no targets parks the review without involving anyone', () => {
 })
 
 test('a note of whitespace is not a note', () => {
-  const problems = validateEscalation(
-    escalation({ targets: ['customer_service'], note: '   \n ' })
-  )
+  const problems = validateEscalation(escalation({ targets: ['provider'], note: '   \n ', toProviderId: 'u1' }))
   assert.deepEqual(problems, ['Say why this needs attention.'])
-})
-
-test('customer service alone is a complete escalation', () => {
-  assert.deepEqual(
-    validateEscalation(escalation({ targets: ['customer_service'], note: 'Book a redraw' })),
-    []
-  )
 })
 
 test('handing to a provider requires naming which one', () => {
@@ -70,25 +65,8 @@ test('handing to a provider requires naming which one', () => {
   )
 })
 
-test('both targets at once is allowed', () => {
-  assert.deepEqual(
-    validateEscalation(
-      escalation({
-        targets: ['customer_service', 'provider'],
-        note: 'Needs a redraw and a second opinion',
-        toProviderId: 'u1',
-      })
-    ),
-    []
-  )
-})
-
 test('parking for yourself does not transfer ownership', () => {
   assert.equal(transfersOwnership(escalation({ note: 'Come back later' })), false)
-})
-
-test('customer service does not take ownership of a review', () => {
-  assert.equal(transfersOwnership(escalation({ targets: ['customer_service'] })), false)
 })
 
 test('a self-park is recorded as needing attention, not as an escalation', () => {
@@ -102,14 +80,6 @@ test('an escalation names who was involved', () => {
   assert.equal(
     summarizeNeedsAttention({
       actorName: 'Dan',
-      targets: ['customer_service'],
-      handedToName: null,
-    }),
-    'Dan escalated to Customer service'
-  )
-  assert.equal(
-    summarizeNeedsAttention({
-      actorName: 'Dan',
       targets: ['provider'],
       handedToName: 'Sam',
     }),
@@ -119,7 +89,6 @@ test('an escalation names who was involved', () => {
 
 test('the provider route does take ownership', () => {
   assert.ok(transfersOwnership(escalation({ targets: ['provider'] })))
-  assert.ok(transfersOwnership(escalation({ targets: ['customer_service', 'provider'] })))
 })
 
 test('every target has a label and a hint', () => {

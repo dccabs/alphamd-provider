@@ -307,7 +307,7 @@ describe('userPromptForField', () => {
   it('asks for each field by its own name', () => {
     assert.match(
       userPromptForField({ ...base, field: 'csInstructions', instructions: 'book the draw' }),
-      /Write the Instructions for customer service field/
+      /Write the Customer service follow-up field/
     )
   })
 })
