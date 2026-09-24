@@ -73,6 +73,12 @@ const testosterone = change({
 
 /** Fields a close-out requires that other dispositions do not. */
 function closeOut(disposition: Disposition): Partial<ReviewDraft> {
+  if (disposition === 'labs_not_sufficient') {
+    return {
+      insufficientReasons: ['no_name'],
+      patientMessage: "The report doesn't show your name.",
+    }
+  }
   if (disposition !== 'treatment_not_recommended') return {}
   return {
     providerNote: 'Hematocrit and symptoms do not support starting.',
@@ -1303,4 +1309,95 @@ test('a dose change alone still gives customer service something to do', () => {
     'Dr Smith'
   )
   assert.match(audiences.customerService, /Update the prescription and the next shipment\./)
+})
+
+const insufficient = (patch: Partial<ReviewDraft> = {}): ReviewDraft =>
+  draft({
+    disposition: 'labs_not_sufficient',
+    insufficientReasons: ['no_name', 'too_old'],
+    patientMessage: "We aren't able to use this report yet.",
+    ...patch,
+  })
+
+test('labs not sufficient needs at least one reason', () => {
+  assert.deepEqual(validateCompletion(insufficient({ insufficientReasons: [] })), [
+    'Choose at least one reason the labs are not sufficient.',
+  ])
+})
+
+test('labs not sufficient needs Other to say what it is', () => {
+  assert.deepEqual(
+    validateCompletion(insufficient({ insufficientReasons: ['other'], insufficientOther: ' ' })),
+    ['Say what the other reason is.']
+  )
+  assert.deepEqual(
+    validateCompletion(
+      insufficient({ insufficientReasons: ['other'], insufficientOther: 'Two patients on one page' })
+    ),
+    []
+  )
+})
+
+test('labs not sufficient needs a message for the patient', () => {
+  assert.deepEqual(validateCompletion(insufficient({ patientMessage: '' })), [
+    'Write a message for the patient.',
+  ])
+})
+
+test('labs not sufficient cannot also add a medication or change a dose', () => {
+  const problems = validateCompletion(
+    insufficient({
+      newMedications: [med({ name: 'Anastrozole', dose: '0.5mg twice weekly' })],
+      doseChanges: [testosterone],
+    })
+  )
+  assert.equal(problems.length, 2)
+  assert.ok(problems.some((p) => /cannot also add a medication/.test(p)))
+  assert.ok(problems.some((p) => /only recorded under the Dose change/.test(p)))
+})
+
+test('labs not sufficient is offered to both workflows and validates the same in each', () => {
+  assert.deepEqual(validateCompletion(insufficient(), 'onboarding'), [])
+  assert.deepEqual(validateCompletion(insufficient(), 'member'), [])
+})
+
+test('labs not sufficient leaves the status alone and raises no flag of its own', () => {
+  const plan = planCompletion(insufficient(), 'Dr. Reyes')
+  assert.equal(plan.patientStatusId, null)
+  assert.deepEqual(plan.removeFlagIds, [FLAG.needsLabReview])
+  assert.deepEqual(plan.addFlagIds, [])
+})
+
+test('labs not sufficient still flags customer service when the provider asks', () => {
+  const plan = planCompletion(insufficient({ csInstructions: 'Call the lab for a copy.' }), 'Dr. Reyes')
+  assert.deepEqual(plan.addFlagIds, [FLAG.followUpRequired])
+})
+
+test('labs not sufficient records its reasons and lists them on the queue row', () => {
+  const plan = planCompletion(
+    insufficient({
+      insufficientReasons: ['more_markers', 'other'],
+      insufficientOther: 'Handwritten values',
+      labOrders: [labs({ timing: 'in_12_weeks' })],
+    }),
+    'Dr. Reyes'
+  )
+  assert.deepEqual(plan.detail.labsNotSufficient, {
+    reasons: ['more_markers', 'other'],
+    other: 'Handwritten values',
+  })
+  assert.equal(
+    plan.resolution,
+    'Labs not sufficient: Need more markers; Other — Handwritten values'
+  )
+  assert.match(plan.events, /Labs not accepted: Need more markers; Other — Handwritten values\./)
+})
+
+test('no other disposition records insufficient reasons, even if left on the draft', () => {
+  const plan = planCompletion(
+    draft({ disposition: 'continue_protocol', insufficientReasons: ['no_name'] }),
+    'Dr. Reyes'
+  )
+  assert.equal(plan.detail.labsNotSufficient, null)
+  assert.doesNotMatch(plan.events, /Labs not accepted/)
 })

@@ -20,6 +20,10 @@ _Avoid_: Case, ticket, task
 The clinical decision recorded when a Lab Review is finished. Which options are offered depends on whether the Patient is still Onboarding or is already a Member.
 _Avoid_: Resolution, outcome, status (status is the queue column)
 
+**Labs not sufficient**:
+A Disposition, offered to Onboarding and Member Patients, for a lab report that cannot be accepted for review: missing markers, no name, no birthday, older than 90 days, looks altered, or Other. The chosen reasons prefill the chart note and a message telling the Patient, without accusation, why the report cannot be used. It does not change the Patient's status.
+_Avoid_: Rejected labs, invalid labs, bad labs
+
 **Needs attention**:
 A Lab Review parked before a Disposition is recorded. It stays with the assigned Provider unless they handed it to another Provider.
 _Avoid_: Escalated (that means someone else has work), on hold, flagged

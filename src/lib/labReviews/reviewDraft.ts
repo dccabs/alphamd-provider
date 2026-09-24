@@ -2,6 +2,7 @@
 // `npm test`, which runs TypeScript through Node's type stripping.
 import { parseConsultRequest, type ConsultRequest } from '../consultations/request.ts'
 import { parseOrders, type LabOrder } from '../labOrders/order.ts'
+import { parseInsufficientReasons, type InsufficientReason } from './labsNotSufficient.ts'
 import { parseSkippedSteps, type ReviewStepId } from './reviewSteps.ts'
 
 /**
@@ -21,6 +22,8 @@ import { parseSkippedSteps, type ReviewStepId } from './reviewSteps.ts'
  * have a dose changed because there is no protocol yet, and an active patient is
  * past the point of "treatment recommended". They share Follow-up needed: more
  * labs or a consult can be required before either workflow can decide the rest.
+ * They also share Labs not sufficient: a report that cannot be accepted cannot
+ * be reviewed, whichever workflow the Patient is in.
  */
 
 /** For a patient who is not yet on treatment. */
@@ -28,6 +31,7 @@ export const ONBOARDING_DISPOSITIONS = [
   'treatment_recommended',
   'treatment_not_recommended',
   'follow_up_needed',
+  'labs_not_sufficient',
 ] as const
 
 /** For a patient already on a protocol. */
@@ -35,16 +39,18 @@ export const ACTIVE_DISPOSITIONS = [
   'dose_change',
   'continue_protocol',
   'follow_up_needed',
+  'labs_not_sufficient',
 ] as const
 
-/** Every disposition once. The workflow sets share Follow-up needed, so this is
- *  not a concatenation of the two. */
+/** Every disposition once. The workflow sets share Follow-up needed and Labs not
+ *  sufficient, so this is not a concatenation of the two. */
 export const DISPOSITIONS = [
   'treatment_recommended',
   'treatment_not_recommended',
   'dose_change',
   'continue_protocol',
   'follow_up_needed',
+  'labs_not_sufficient',
 ] as const
 
 export type Disposition = (typeof DISPOSITIONS)[number]
@@ -59,6 +65,7 @@ export const DISPOSITION_LABELS: Record<Disposition, string> = {
   dose_change: 'Dose change',
   continue_protocol: 'Continue protocol as designed',
   follow_up_needed: 'Follow-up needed',
+  labs_not_sufficient: 'Labs not sufficient',
 }
 
 export const DISPOSITION_HINTS: Record<Disposition, string> = {
@@ -67,6 +74,7 @@ export const DISPOSITION_HINTS: Record<Disposition, string> = {
   dose_change: 'Adjust an existing medication',
   continue_protocol: 'No changes; continue as prescribed',
   follow_up_needed: 'More labs, a new medication, or a message for the patient',
+  labs_not_sufficient: "Missing markers or details, too old, or can't be verified",
 }
 
 export type PatientWorkflow = 'onboarding' | 'member'
@@ -158,6 +166,11 @@ export type DraftMedication = {
  */
 export type ReviewDraft = {
   disposition: Disposition | null
+  /** Why the labs could not be accepted, in listing order. Only read under Labs
+   *  not sufficient; kept across a disposition change like everything else. */
+  insufficientReasons: InsufficientReason[]
+  /** What Other means, for the chart. Never sent to the Patient as written. */
+  insufficientOther: string
   /** In the order the provider confirmed them, at most one per prescription. */
   doseChanges: DoseChange[]
   /** What the patient is told, in their words rather than the chart's. */
@@ -213,6 +226,8 @@ export type ReviewDraft = {
 
 export const EMPTY_DRAFT: ReviewDraft = {
   disposition: null,
+  insufficientReasons: [],
+  insufficientOther: '',
   doseChanges: [],
   patientMessage: '',
   newMedications: [],
@@ -317,6 +332,8 @@ export function parseDraft(json: unknown): ReviewDraft {
 
   return {
     disposition: isDisposition(raw.disposition) ? raw.disposition : null,
+    insufficientReasons: parseInsufficientReasons(raw.insufficientReasons),
+    insufficientOther: str(raw.insufficientOther),
     doseChanges: doseChangesFrom(raw),
     // `instructions` is what this field was called while it held dosing and
     // timing directions for the patient. It became the message they are sent,

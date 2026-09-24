@@ -1,5 +1,6 @@
 import { consultLine } from '../consultations/request.ts'
 import { orderLine } from '../labOrders/order.ts'
+import { insufficientReasonsLine } from '../labReviews/labsNotSufficient.ts'
 import { DISPOSITION_LABELS, type ReviewDraft } from '../labReviews/reviewDraft.ts'
 import { ESCALATION_TARGET_LABELS, type Escalation } from '../labReviews/needsAttention.ts'
 import type { ReviewField } from './reviewFields.ts'
@@ -31,6 +32,9 @@ export function describeDecision(
   if (draft.disposition) {
     lines.push(`Disposition chosen: ${DISPOSITION_LABELS[draft.disposition]}.`)
   }
+
+  const reasons = insufficientReasonsLine(draft)
+  if (reasons) lines.push(`Why the labs cannot be accepted: ${reasons}.`)
 
   // One sentence per prescription. A model handed "testosterone and anastrozole
   // were changed" writes one plan for two doses.

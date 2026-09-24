@@ -59,7 +59,7 @@ export const STEP_TITLES: Record<ReviewStepId, string> = {
   consultation: 'Consultation',
   providerNote: 'Note for the chart',
   csInstructions: 'Customer service follow-up (only if needed)',
-  patientMessage: 'Message for patient',
+  patientMessage: 'Message for patient (preferred)',
 }
 
 /**
@@ -132,13 +132,15 @@ export function stepsFor(
     if (step === 'doseChanges') {
       return draft.disposition === 'dose_change' || hasContent(step, draft)
     }
-    // Continuing as designed, declining treatment, and an Onboarding follow-up
-    // are all statements that nothing is being started. A Member follow-up can
-    // still add a medication; Onboarding has no protocol to add one to.
+    // Continuing as designed, declining treatment, labs that cannot be accepted,
+    // and an Onboarding follow-up are all statements that nothing is being
+    // started. A Member follow-up can still add a medication; Onboarding has no
+    // protocol to add one to.
     if (step === 'newMedications') {
       const startingNothing =
         draft.disposition === 'continue_protocol' ||
         draft.disposition === 'treatment_not_recommended' ||
+        draft.disposition === 'labs_not_sufficient' ||
         (workflow === 'onboarding' && draft.disposition === 'follow_up_needed')
       return !startingNothing || hasContent(step, draft)
     }
