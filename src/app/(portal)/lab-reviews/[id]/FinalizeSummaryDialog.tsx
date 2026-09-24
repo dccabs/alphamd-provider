@@ -25,6 +25,7 @@ import {
 import { shortDate } from '@/lib/labReviews/format'
 import { describeDecision } from '@/lib/ai/decision'
 import { DISPOSITION_LABELS, type ReviewDraft } from '@/lib/labReviews/reviewDraft'
+import { INSUFFICIENT_REASON_SHORT } from '@/lib/labReviews/labsNotSufficient'
 import { FieldAssistButton } from './FieldAssistButton'
 import { REPLY_IDENTITY_LABELS, type ReplyIdentity } from '@/lib/labReviews/replyIdentity'
 import {
@@ -453,6 +454,13 @@ export function FinalizeSummaryDialog({
           <Section title="DECISION">
             <ul className="flex flex-col gap-1 text-[13px]">
               <li>{DISPOSITION_LABELS[disposition]}</li>
+              {plan.detail.labsNotSufficient?.reasons.map((reason) => (
+                <li key={`reason-${reason}`}>
+                  {reason === 'other'
+                    ? `Other — ${plan.detail.labsNotSufficient?.other ?? ''}`
+                    : INSUFFICIENT_REASON_SHORT[reason]}
+                </li>
+              ))}
               {doseChanges.map((change) => (
                 <li key={`dose-${change.medicationId}-${change.medication}`}>
                   {change.medication} — {change.from ? `${change.from} → ` : ''}

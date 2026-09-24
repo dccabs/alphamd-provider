@@ -12,8 +12,18 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { DictationTextarea } from '@/components/ui/dictation-textarea'
+import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { validateCompletion } from '@/lib/labReviews/completion'
+import {
+  INSUFFICIENT_REASONS,
+  INSUFFICIENT_REASON_LABELS,
+  insufficientChartNote,
+  insufficientPatientMessage,
+  parseInsufficientReasons,
+  withInsufficientPrefill,
+  type InsufficientReason,
+} from '@/lib/labReviews/labsNotSufficient'
 import type { Consultation } from '@/lib/labReviews/consultations'
 import { shortTime } from '@/lib/labReviews/format'
 import {
@@ -203,7 +213,11 @@ export function ReviewModal({
   const unsaved = useRef(false)
 
   const update = (patch: Partial<ReviewDraft>) => {
-    const next = { ...latest.current, ...patch }
+    const next = withInsufficientPrefill(
+      latest.current,
+      { ...latest.current, ...patch },
+      patientFirstName
+    )
     latest.current = next
     setDraft(next)
     unsaved.current = true
@@ -271,6 +285,9 @@ export function ReviewModal({
   const options = dispositionsFor(patientStatus)
   const continuing = draft.disposition === 'continue_protocol'
   const declining = draft.disposition === 'treatment_not_recommended'
+  const insufficient = draft.disposition === 'labs_not_sufficient'
+  const prefilledNote = insufficientChartNote(draft)
+  const prefilledMessage = insufficientPatientMessage(draft, patientFirstName)
 
   const hasQuotedSubscription = draft.newMedications.some(
     (med) => med.medicationId !== null && subscriptionMedicationIds.includes(med.medicationId)
@@ -394,6 +411,15 @@ export function ReviewModal({
             </div>
           </fieldset>
 
+          {insufficient && (
+            <InsufficientReasons
+              reasons={draft.insufficientReasons}
+              other={draft.insufficientOther}
+              onReasons={(insufficientReasons) => update({ insufficientReasons })}
+              onOther={(insufficientOther) => update({ insufficientOther })}
+            />
+          )}
+
           {/* Stays in the list under another disposition while changes are still
               recorded, because completion refuses them there and this is the only
               place they can be removed. */}
@@ -438,6 +464,12 @@ export function ReviewModal({
               interval are how continuing as designed gets checked; a close-out
               does not order more. */}
           <ReviewStep {...stepProps('labOrders')} onOpen={setPin} onAdvance={advance}>
+            {insufficient && draft.insufficientReasons.includes('more_markers') && (
+              <p className="text-xs font-medium text-foreground">
+                The panel is missing markers. You can send this patient a lab order here for
+                the tests you need.
+              </p>
+            )}
             <LabOrdersPanel
               patientState={patientState}
               providers={labProviders}
@@ -476,12 +508,17 @@ export function ReviewModal({
             // completion, and is handed over as recorded context so the prose
             // agrees with it.
             action={
-              <FieldAssistButton
-                field="providerNote"
-                value={draft.providerNote}
-                onChange={(providerNote) => update({ providerNote })}
-                recorded={describeDecision(draft, { omit: 'providerNote' })}
-              />
+              <div className="flex items-center gap-1">
+                {prefilledNote && draft.providerNote !== prefilledNote && (
+                  <RewriteFromReasons onClick={() => update({ providerNote: prefilledNote })} />
+                )}
+                <FieldAssistButton
+                  field="providerNote"
+                  value={draft.providerNote}
+                  onChange={(providerNote) => update({ providerNote })}
+                  recorded={describeDecision(draft, { omit: 'providerNote' })}
+                />
+              </div>
             }
           >
             <Label htmlFor="provider-note" className="sr-only">
@@ -552,20 +589,32 @@ export function ReviewModal({
             // about the patient, and both read better as "the patient" than as a
             // first name.
             action={
-              <FieldAssistButton
-                field="patientMessage"
-                value={draft.patientMessage}
-                onChange={(patientMessage) => update({ patientMessage })}
-                recorded={describeDecision(draft, { omit: 'patientMessage' })}
-                firstName={patientFirstName}
-              />
+              <div className="flex items-center gap-1">
+                {prefilledMessage && draft.patientMessage !== prefilledMessage && (
+                  <RewriteFromReasons
+                    onClick={() => update({ patientMessage: prefilledMessage })}
+                  />
+                )}
+                <FieldAssistButton
+                  field="patientMessage"
+                  value={draft.patientMessage}
+                  onChange={(patientMessage) => update({ patientMessage })}
+                  recorded={describeDecision(draft, { omit: 'patientMessage' })}
+                  firstName={patientFirstName}
+                />
+              </div>
             }
           >
             <Label htmlFor="patient-message" className="sr-only">
               {STEP_TITLES.patientMessage}
             </Label>
+            <p id="patient-message-hint" className="mb-2 text-xs font-medium text-foreground">
+              Messaging the patient directly is the best practice for speedy communication. Any
+              replies from the patient will go directly to customer service.
+            </p>
             <DictationTextarea
               id="patient-message"
+              aria-describedby="patient-message-hint"
               rows={5}
               placeholder="What the patient is told — the result, what is changing, what they do next…"
               value={draft.patientMessage}
@@ -664,6 +713,67 @@ function DispositionOption({
         <span className="block text-xs text-muted-foreground">{hint}</span>
       </span>
     </label>
+  )
+}
+
+/**
+ * Why the labs cannot be accepted. The list is kept in listing order however
+ * the boxes are clicked, so the prefilled text reads the same either way.
+ */
+function InsufficientReasons({
+  reasons,
+  other,
+  onReasons,
+  onOther,
+}: {
+  reasons: InsufficientReason[]
+  other: string
+  onReasons: (reasons: InsufficientReason[]) => void
+  onOther: (other: string) => void
+}) {
+  const toggle = (reason: InsufficientReason, checked: boolean) =>
+    onReasons(
+      parseInsufficientReasons(
+        checked ? [...reasons, reason] : reasons.filter((r) => r !== reason)
+      )
+    )
+
+  return (
+    <fieldset className="flex flex-col gap-2">
+      <legend className="text-xs font-bold tracking-wider text-muted-foreground">
+        WHY THE LABS ARE NOT SUFFICIENT
+      </legend>
+      <div className="flex flex-col gap-1.5">
+        {INSUFFICIENT_REASONS.map((reason) => (
+          <label key={reason} className="flex cursor-pointer items-start gap-2.5 text-[13px]">
+            <input
+              type="checkbox"
+              checked={reasons.includes(reason)}
+              onChange={(event) => toggle(reason, event.target.checked)}
+              className="mt-0.5 size-3.5 accent-green-600"
+            />
+            <span>{INSUFFICIENT_REASON_LABELS[reason]}</span>
+          </label>
+        ))}
+        {reasons.includes('other') && (
+          <Input
+            aria-label="Other reason"
+            placeholder="What else is wrong with the report? (chart only)"
+            value={other}
+            onChange={(event) => onOther(event.target.value)}
+          />
+        )}
+      </div>
+    </fieldset>
+  )
+}
+
+/** Puts the reasons' wording back after the Provider has edited it away. */
+function RewriteFromReasons({ onClick }: { onClick: () => void }) {
+  return (
+    <Button variant="ghost" size="xs" onClick={onClick}>
+      Rewrite from reasons
+    </Button>
   )
 }
 

@@ -27,6 +27,8 @@ test('a null or non-object draft column reads as empty', () => {
 test('a full draft round-trips', () => {
   const stored = {
     disposition: 'follow_up_needed',
+    insufficientReasons: ['more_markers', 'other'],
+    insufficientOther: 'Wrong patient on page 2',
     doseChanges: [
       {
         medicationId: 4821,
@@ -439,19 +441,30 @@ test('every disposition has a label and hint', () => {
   }
 })
 
-test('onboarding offers follow-up needed after the two treatment decisions', () => {
+test('onboarding offers follow-up needed and labs not sufficient after the two treatment decisions', () => {
   assert.deepEqual(ONBOARDING_DISPOSITIONS, [
     'treatment_recommended',
     'treatment_not_recommended',
     'follow_up_needed',
+    'labs_not_sufficient',
   ])
 })
 
-test('the two disposition sets share only follow-up needed', () => {
+test('the two disposition sets share only follow-up needed and labs not sufficient', () => {
   const shared = ONBOARDING_DISPOSITIONS.filter((d) =>
     (ACTIVE_DISPOSITIONS as readonly string[]).includes(d)
   )
-  assert.deepEqual(shared, ['follow_up_needed'])
+  assert.deepEqual(shared, ['follow_up_needed', 'labs_not_sufficient'])
+})
+
+test('stored insufficient reasons are read in listing order, unknowns and repeats dropped', () => {
+  const draft = parseDraft({
+    disposition: 'labs_not_sufficient',
+    insufficientReasons: ['too_old', 'bogus', 'no_name', 'too_old', 7],
+    insufficientOther: 42,
+  })
+  assert.deepEqual(draft.insufficientReasons, ['no_name', 'too_old'])
+  assert.equal(draft.insufficientOther, '')
 })
 
 test('an onboarding follow-up does not mention adding a medication', () => {

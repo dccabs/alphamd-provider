@@ -10,6 +10,11 @@ import {
 import { orderLine, orderWhen, validateOrder, type LabOrder } from '../labOrders/order.ts'
 import { FLAG, PATIENT_STATUS } from './clinicalIds.ts'
 import {
+  insufficientReasonsLine,
+  recordedReasons,
+  type InsufficientReason,
+} from './labsNotSufficient.ts'
+import {
   DISPOSITION_LABELS,
   type Disposition,
   type PatientWorkflow,
@@ -72,6 +77,12 @@ export type DispositionDetail = {
     eventTypeId: string
     eventTypeName: string
     message: string | null
+  } | null
+  /** Why the labs were not accepted. Null under every other disposition. */
+  labsNotSufficient: {
+    reasons: InsufficientReason[]
+    /** What Other meant, when it was chosen. */
+    other: string | null
   } | null
   patientMessage: string | null
   csInstructions: string | null
@@ -176,6 +187,26 @@ export function validateCompletion(
         ? 'Continuing the protocol as designed cannot also add a medication. Remove it, or choose another disposition.'
         : 'Treatment not recommended cannot also add a medication. Remove it, or choose Treatment recommended.'
     )
+  }
+
+  // Labs that cannot be accepted cannot be reviewed, so nothing clinical can be
+  // decided from them. The Patient has to be told why, which is the point of
+  // this disposition.
+  if (draft.disposition === 'labs_not_sufficient') {
+    if (!draft.insufficientReasons.length) {
+      problems.push('Choose at least one reason the labs are not sufficient.')
+    }
+    if (draft.insufficientReasons.includes('other') && !draft.insufficientOther.trim()) {
+      problems.push('Say what the other reason is.')
+    }
+    if (namedMedications(draft).length > 0) {
+      problems.push(
+        'Labs not sufficient cannot also add a medication. Remove it, or choose another disposition.'
+      )
+    }
+    if (!draft.patientMessage.trim()) {
+      problems.push('Write a message for the patient.')
+    }
   }
 
   // Onboarding Follow-up needed is "we are not deciding treatment yet". A new
@@ -470,6 +501,8 @@ export function completionEvents(
   label: string
 ): string {
   const lines: string[] = [`Lab review completed by ${providerName}. Disposition: ${label}.`]
+  const reasons = insufficientReasonsLine(draft)
+  if (reasons) lines.push(`Labs not accepted: ${reasons}.`)
   const changes = doseChangesFor(draft)
     .map(doseChangeLines)
     .filter((change) => change !== null)
@@ -624,6 +657,15 @@ export function planCompletion(
         eventTypeName: eventTypeById(draft.consultation.eventTypeId)?.name ?? 'Unknown type',
         message: draft.consultation.message.trim() || null,
       },
+      labsNotSufficient:
+        disposition === 'labs_not_sufficient'
+          ? {
+              reasons: recordedReasons(draft),
+              other: recordedReasons(draft).includes('other')
+                ? draft.insufficientOther.trim()
+                : null,
+            }
+          : null,
       patientMessage: draft.patientMessage.trim() || null,
       csInstructions: draft.csInstructions.trim() || null,
     },
@@ -649,6 +691,11 @@ function resolutionLine(draft: ReviewDraft, label: string): string {
       .map((change) => `${change.medication.trim()} — ${change.value.trim()}`)
       .join('; ')}`
   }
+
+  // Why the report was turned away is what a reader scanning the queue needs,
+  // ahead of any labs ordered to replace it.
+  const reasons = insufficientReasonsLine(draft)
+  if (reasons) return `${label}: ${reasons}`
 
   // When labs were ordered, that is the most specific thing about the review. The
   // date rather than the panel: a queue row has no space for fifteen test names,
