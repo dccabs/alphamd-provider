@@ -16,6 +16,9 @@ export const FLAG = {
   /** "Needs lab review" — cleared when a review is completed. Carries no history;
    *  `lab_reviews` is the record. */
   needsLabReview: 3,
+  /** "Dose Change" — raised beside Follow Up Required when a review changes a
+   *  dose, carrying the new dose as its note for customer service. */
+  doseChange: 4,
   /** "New Pricing / Protocol Sent" — carried by a patient who already has an
    *  active subscription, in place of the status change. See `sendProtocol`. */
   newPricingSent: 5,
@@ -50,6 +53,7 @@ export const PATIENT_STATUS = {
 export const FLAG_LABELS: Record<number, string> = {
   [FLAG.followUpRequired]: 'Follow Up Required',
   [FLAG.needsLabReview]: 'Needs lab review',
+  [FLAG.doseChange]: 'Dose Change',
   [FLAG.newPricingSent]: 'New Pricing / Protocol Sent',
   [FLAG.labsReviewedNoChanges]: 'Labs reviewed, no changes recommended',
 }

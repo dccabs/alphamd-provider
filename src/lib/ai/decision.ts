@@ -113,8 +113,8 @@ export function describeDecision(
   return lines.join('\n')
 }
 
-/** Who the needs-attention note is for, so the draft is a reminder, a note for
- *  customer service, or a Handoff — not the wrong one of those. */
+/** Who the needs-attention note is for, so the draft is a reminder or a Handoff —
+ *  not the wrong one of those. */
 export function describeEscalation(escalation: Escalation): string {
   const lines: string[] = []
 
@@ -130,12 +130,6 @@ export function describeEscalation(escalation: Escalation): string {
       .map((t) => ESCALATION_TARGET_LABELS[t])
       .join(' and ')}.`
   )
-
-  if (escalation.targets.includes('customer_service')) {
-    lines.push(
-      'The customer service reader is not a clinician. Describe what to arrange, ask, or relay — never what to prescribe.'
-    )
-  }
 
   return lines.join('\n')
 }

@@ -58,7 +58,7 @@ export const STEP_TITLES: Record<ReviewStepId, string> = {
   labOrders: 'Labs to order',
   consultation: 'Consultation',
   providerNote: 'Note for the chart',
-  csInstructions: 'Instructions for customer service',
+  csInstructions: 'Customer service follow-up (only if needed)',
   patientMessage: 'Message for patient',
 }
 

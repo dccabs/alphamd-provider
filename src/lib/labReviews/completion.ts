@@ -117,7 +117,12 @@ export type CompletionPlan = {
    *  written from. Not written to the chart. */
   events: string
   detail: DispositionDetail
+  /** Only ever flags customer service has to act on, plus "no changes" when the
+   *  patient was not told directly. Nothing here is an Action. */
   addFlagIds: number[]
+  /** What customer service has to do, per flag in `addFlagIds`, written onto
+   *  that Patient Flag. A flag with no entry carries no note. */
+  flagNotes: Partial<Record<number, string>>
   /** Deleted, not deactivated — matching the main app. The flag carries no
    *  history; `lab_reviews` is the record. */
   removeFlagIds: number[]
@@ -353,68 +358,42 @@ function doseChangesFor(draft: ReviewDraft) {
 }
 
 /**
- * Everything customer service has to read, as one block.
+ * Everything customer service has to do, as one block, and nothing they don't.
  *
- * A dose change and an added medication lead it whether or not the provider typed
- * anything, because somebody downstream has to update a prescription and the
- * chart note is where they read what to do. Composed rather than appended into
- * the provider's own text, so changing the dose twice cannot leave a stale
- * instruction behind.
+ * Only three things are CS work: a dose change (a prescription and a shipment to
+ * update), a protocol that could not be priced (nobody else will price it), and
+ * whatever the provider asked of them. An added medication that was quoted is not
+ * here: the patient pays on their protocol page and that raises Needs Order on
+ * its own. Neither are labs or a consultation, which go straight to the Patient.
  *
- * Comes back empty when nobody downstream has to act, so callers can drop the
- * header rather than emit one with nothing under it.
- *
- * Labs and a consultation are not in this block. Those go on the chart
- * (`chartActionLines`) and out to the Patient; customer service has nothing to
- * do with either once they are sent.
+ * Comes back empty when nobody downstream has to act, which is also when no
+ * Follow Up Required is raised.
  */
 function customerServiceBlock(draft: ReviewDraft, protocol: ProtocolOutcome | null): string {
-  const changes = doseChangesFor(draft)
-    .map(doseChangeLines)
-    .filter((change) => change !== null)
-  const added = namedMedications(draft)
-    .map(newMedicationLines)
-    .filter((medication) => medication !== null)
-
-  return [
-    ...changes.map((change) => change.cs),
-    ...added.map((medication) => medication.cs),
-    ...protocolInstructions(protocol),
-    draft.csInstructions.trim() || null,
-  ]
-    .filter(Boolean)
-    .join('\n')
+  return [...doseChangeCsLines(draft), ...csTasks(draft, protocol)].join('\n')
 }
 
-/**
- * What customer service has to know about the money.
- *
- * A quote is *not* an action for them — the patient approves and pays on their own
- * protocol page — but it is the thing the patient rings about, so it is stated
- * along with the caveat that would otherwise cost them a refund conversation.
- *
- * A handoff is the opposite: a real task, and the only reason the medication ever
- * reaches a shipment. It leads with the imperative for that reason.
- */
-function protocolInstructions(protocol: ProtocolOutcome | null): string[] {
-  if (!protocol) return []
+function doseChangeCsLines(draft: ReviewDraft): string[] {
+  return doseChangesFor(draft)
+    .map(doseChangeLines)
+    .filter((change) => change !== null)
+    .map((change) => change.cs)
+}
 
-  if (protocol.kind === 'handed-off') {
-    return [
-      [
-        'Recommended protocol — price this one by hand and send it; it could not be priced automatically:',
-        ...protocol.reasons.map((reason) => `  ${reason}`),
-      ].join('\n'),
-    ]
-  }
+/** The CS work that is not a dose change: the handoff, then the provider's ask. */
+function csTasks(draft: ReviewDraft, protocol: ProtocolOutcome | null): string[] {
+  return [...handoffInstructions(protocol), draft.csInstructions.trim()].filter(Boolean)
+}
 
+/** A handoff leads with the imperative: it is the only reason the medication
+ *  ever reaches a shipment. */
+function handoffInstructions(protocol: ProtocolOutcome | null): string[] {
+  if (protocol?.kind !== 'handed-off') return []
   return [
     [
-      `Recommended protocol — the patient is emailed a quote for ${protocol.total} due today. They approve and pay on their protocol page, and it ships after that; nothing to do here unless they ask.`,
-      protocol.caveat,
-    ]
-      .filter(Boolean)
-      .join(' '),
+      'Recommended protocol — price this one by hand and send it; it could not be priced automatically:',
+      ...protocol.reasons.map((reason) => `  ${reason}`),
+    ].join('\n'),
   ]
 }
 
@@ -535,14 +514,19 @@ export function completionEvents(
 }
 
 /**
- * Lab orders and a consultation, as they should appear on the chart note.
+ * Dose changes, lab orders and a consultation, as they should appear on the
+ * chart note.
  *
  * The AI summary is written from the events and can drop these to stay short.
- * Appended after it so a review that actually placed labs or sent a booking
- * link still says so on the chart. Empty when neither was chosen.
+ * Appended after it so a review that changed a dose, placed labs or sent a
+ * booking link still says so on the chart. Empty when none of them was chosen.
  */
 export function chartActionLines(draft: ReviewDraft): string[] {
-  const lines = draft.labOrders.map((order) => `Labs ordered: ${orderLine(order)}`)
+  const lines = doseChangesFor(draft)
+    .map(doseChangeLines)
+    .filter((change) => change !== null)
+    .map((change) => `${change.chart}.`)
+  lines.push(...draft.labOrders.map((order) => `Labs ordered: ${orderLine(order)}`))
   if (draft.consultation) {
     lines.push(`Consultation requested: ${consultLine(draft.consultation)}`)
   }
@@ -565,19 +549,15 @@ export function planCompletion(
   // Every completion clears "Needs lab review" — that is what completing means.
   const removeFlagIds = [FLAG.needsLabReview]
   const addFlagIds: number[] = []
+  const flagNotes: Partial<Record<number, string>> = {}
   let patientStatusId: number | null = null
 
   switch (disposition) {
     case 'continue_protocol':
       // The only disposition where "no changes recommended" is a true statement.
-      addFlagIds.push(FLAG.labsReviewedNoChanges)
-      break
-
-    case 'dose_change':
-    case 'follow_up_needed':
-      // Somebody downstream has to act — update a prescription, order labs, relay
-      // instructions. The flag is what makes that visible outside this review.
-      addFlagIds.push(FLAG.followUpRequired)
+      // Its flag asks CS to tell the patient, so it is only raised when the
+      // provider did not message them directly.
+      if (!draft.patientMessage.trim()) addFlagIds.push(FLAG.labsReviewedNoChanges)
       break
 
     case 'treatment_not_recommended':
@@ -590,8 +570,22 @@ export function planCompletion(
       // quote, and whether one goes out depends on whether it could be priced —
       // which this pure function has no way of knowing. `sendProtocol` sets the
       // status itself, once a quote is actually in the patient's inbox.
-      // Follow Up Required is also not set: the recommendation is the decision.
       break
+  }
+
+  // Follow Up Required means CS has something to do, and its note says what.
+  // Labs, a consultation or a patient message alone reach the Patient directly.
+  const doseLines = doseChangeCsLines(draft)
+  const tasks = csTasks(draft, protocol)
+  if (doseLines.length || tasks.length) {
+    addFlagIds.push(FLAG.followUpRequired)
+    flagNotes[FLAG.followUpRequired] = tasks.length
+      ? tasks.join('\n')
+      : 'Dose change — see the Dose Change flag.'
+  }
+  if (doseLines.length) {
+    addFlagIds.push(FLAG.doseChange)
+    flagNotes[FLAG.doseChange] = doseLines.join('\n')
   }
 
   const events = completionEvents(draft, providerName, protocol, label)
@@ -634,6 +628,7 @@ export function planCompletion(
       csInstructions: draft.csInstructions.trim() || null,
     },
     addFlagIds,
+    flagNotes,
     removeFlagIds,
     patientStatusId,
   }

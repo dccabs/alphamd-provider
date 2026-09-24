@@ -385,13 +385,81 @@ test('only continue-protocol claims no changes were recommended', () => {
   }
 })
 
-test('dispositions that need downstream work raise the follow-up flag', () => {
-  for (const disposition of ['dose_change', 'follow_up_needed'] as const) {
+test('a patient already messaged is not flagged for CS to tell them the labs were fine', () => {
+  const plan = planCompletion(
+    draft({ disposition: 'continue_protocol', patientMessage: 'Your labs look good.' }),
+    'Dr Smith'
+  )
+  assert.ok(!plan.addFlagIds.includes(FLAG.labsReviewedNoChanges))
+})
+
+test('a dose change flags Follow Up Required and Dose Change, with the dose on the Dose Change flag', () => {
+  const plan = planCompletion(
+    draft({ disposition: 'dose_change', doseChanges: [testosterone] }),
+    'Dr Smith'
+  )
+
+  assert.deepEqual(plan.addFlagIds, [FLAG.followUpRequired, FLAG.doseChange])
+  assert.match(
+    plan.flagNotes[FLAG.doseChange] ?? '',
+    /Testosterone cypionate: 140mg\/week → 160mg\/week\..*Update the prescription and the next shipment\./
+  )
+  assert.equal(plan.flagNotes[FLAG.followUpRequired], 'Dose change — see the Dose Change flag.')
+})
+
+test('the dose is not repeated on Follow Up Required when there is also a CS ask', () => {
+  const plan = planCompletion(
+    draft({
+      disposition: 'dose_change',
+      doseChanges: [testosterone],
+      csInstructions: 'Move the refill date.',
+    }),
+    'Dr Smith'
+  )
+  assert.equal(plan.flagNotes[FLAG.followUpRequired], 'Move the refill date.')
+})
+
+test('a follow-up that only orders labs, books a consult or messages the patient flags nobody', () => {
+  const plan = planCompletion(
+    draft({
+      disposition: 'follow_up_needed',
+      labOrders: [labs()],
+      consultation: consult(),
+      patientMessage: 'Please get your labs drawn.',
+    }),
+    'Dr Smith'
+  )
+  assert.deepEqual(plan.addFlagIds, [])
+})
+
+test('a CS ask flags Follow Up Required under any disposition, and the ask is the note', () => {
+  for (const disposition of DISPOSITIONS) {
+    if (disposition === 'dose_change') continue
     const plan = planCompletion(
-      draft({ disposition, doseChanges: [testosterone], labOrders: [labs()] }),
+      draft({
+        disposition,
+        csInstructions: '  Ask the patient to upload a compliant lab report.  ',
+        ...closeOut(disposition),
+      }),
       'Dr Smith'
     )
     assert.ok(plan.addFlagIds.includes(FLAG.followUpRequired), disposition)
+    assert.equal(
+      plan.flagNotes[FLAG.followUpRequired],
+      'Ask the patient to upload a compliant lab report.',
+      disposition
+    )
+  }
+})
+
+test('no dispositions flag Dose Change except a recorded dose change', () => {
+  for (const disposition of DISPOSITIONS) {
+    if (disposition === 'dose_change') continue
+    const plan = planCompletion(
+      draft({ disposition, csInstructions: 'Something.', ...closeOut(disposition) }),
+      'Dr Smith'
+    )
+    assert.ok(!plan.addFlagIds.includes(FLAG.doseChange), disposition)
   }
 })
 
@@ -425,7 +493,6 @@ test('a follow-up leaves the patient status alone', () => {
     'Dr Smith'
   )
   assert.equal(plan.patientStatusId, null)
-  assert.ok(plan.addFlagIds.includes(FLAG.followUpRequired))
 })
 
 test('the note names the provider and the disposition', () => {
@@ -560,14 +627,11 @@ test('an added medication carries its level and the instruction it works out to'
     plan.events,
     /New medication: Testosterone cypionate — 160mg\/week\. Inject \.4mL subcutaneously every 3\.5 days\./
   )
-  assert.match(
-    plan.events,
-    /For customer service: New medication — Testosterone cypionate: 160mg\/week\. Sig: Inject \.4mL subcutaneously every 3\.5 days\. Add it to the prescription and the next shipment\./
-  )
+  // Quoted to the patient and ordered once paid; not a task for customer service.
+  assert.doesNotMatch(plan.events, /For customer service:/)
 })
 
-test('a dose change and an added medication both reach customer service', () => {
-  // The pair this section exists for: one visit, two things for somebody to do.
+test('a dose change reaches customer service and an added medication does not', () => {
   const plan = planCompletion(
     draft({
       disposition: 'dose_change',
@@ -586,7 +650,7 @@ test('a dose change and an added medication both reach customer service', () => 
   assert.match(plan.events, /Dose change: Testosterone cypionate — 160mg\/week \(was 140mg\/week\)/)
   assert.match(plan.events, /New medication: Anastrozole — 1\.00mg - Take 1\/2 tablet/)
   assert.match(plan.events, /For customer service: Dose change — Testosterone cypionate/)
-  assert.match(plan.events, /New medication — Anastrozole: 1\.00mg - Take 1\/2 tablet/)
+  assert.doesNotMatch(plan.events, /New medication — Anastrozole/)
 })
 
 test('a catalog dose that is already a sentence is not punctuated twice', () => {
@@ -1072,12 +1136,28 @@ test('the customer service text is the same text the events carry', () => {
 })
 
 test('customer service is handed the changes before the provider’s own hand-off', () => {
+  // An added medication is not a CS line: it goes out as a quote, and paying for
+  // it raises Needs Order on its own.
   const audiences = reviewAudiences(full, 'Dr Smith')
   assert.deepEqual(audiences.customerService.split('\n'), [
     'Dose change — Testosterone cypionate: 140mg/week → 160mg/week. New sig: Inject .4mL subcutaneously every 3.5 days. Update the prescription and the next shipment.',
-    'New medication — Anastrozole: 0.5mg twice weekly. Add it to the prescription and the next shipment.',
     'Book the 8 week draw.',
   ])
+})
+
+test('the dose change is always on the chart note, whatever the summary says', () => {
+  const plan = planCompletion(
+    draft({
+      disposition: 'dose_change',
+      doseChanges: [testosterone],
+      chartSummary: 'Labs reviewed; dose adjusted.',
+    }),
+    'Dr Smith'
+  )
+  assert.match(
+    plan.note,
+    /Dose change: Testosterone cypionate — 160mg\/week \(was 140mg\/week\)\. Inject \.4mL/
+  )
 })
 
 test('the chart text is the note, character for character', () => {
@@ -1143,12 +1223,14 @@ test('a quote is stated once in the events, without the breakdown', () => {
   assert.equal(plan.events.includes('Base Price: $129.00/mo'), false)
 })
 
-test('customer service is told a quote needs nothing from them, and why to expect a call', () => {
-  const audiences = reviewAudiences(full, 'Dr Smith', QUOTE)
+test('a quote gives customer service nothing to do, and flags nobody', () => {
+  const quoted = draft({
+    disposition: 'treatment_recommended',
+    newMedications: [med({ medicationId: 1, name: 'Testosterone cypionate', dose: '160mg/week' })],
+  })
 
-  assert.match(audiences.customerService, /the patient is emailed a quote for \$137\.39 due today/)
-  assert.match(audiences.customerService, /nothing to do here unless they ask/)
-  assert.match(audiences.customerService, /Quoted at list price/)
+  assert.equal(reviewAudiences(quoted, 'Dr Smith', QUOTE).customerService, '')
+  assert.deepEqual(planCompletion(quoted, 'Dr Smith', QUOTE).addFlagIds, [])
 })
 
 test('a handoff is a task, and reads as one', () => {
@@ -1159,6 +1241,21 @@ test('a handoff is a task, and reads as one', () => {
 
   assert.match(audiences.events, /A recommended protocol was not sent/)
   assert.match(audiences.events, /more than one product matches/)
+})
+
+test('a handoff flags Follow Up Required with the reason as the note', () => {
+  const plan = planCompletion(
+    draft({
+      disposition: 'treatment_recommended',
+      newMedications: [med({ name: 'Sermorelin', dose: '300mcg' })],
+    }),
+    'Dr Smith',
+    HANDED_OFF
+  )
+
+  assert.deepEqual(plan.addFlagIds, [FLAG.followUpRequired])
+  assert.match(plan.flagNotes[FLAG.followUpRequired] ?? '', /price this one by hand/)
+  assert.match(plan.flagNotes[FLAG.followUpRequired] ?? '', /more than one product matches/)
 })
 
 test('a handoff never claims a price went out', () => {
