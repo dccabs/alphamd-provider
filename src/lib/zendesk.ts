@@ -1,6 +1,7 @@
 import 'server-only'
 
 import type { ReplyIdentity } from '@/lib/labReviews/replyIdentity'
+import { newTicketPayload } from '@/lib/zendeskTicket'
 
 /**
  * Zendesk **send** path only: reply to an existing ticket, or create a new one
@@ -111,6 +112,30 @@ async function publicCapableAuthorId(email: string, auth: string): Promise<numbe
   } catch {
     return null
   }
+}
+
+let serviceAccount: Promise<number | null> | null = null
+
+/**
+ * The Zendesk user the API token belongs to — "AlphaMD Support". A new ticket
+ * must name it as the author when the provider cannot be, or Zendesk makes the
+ * patient the author. Cached per process; a failed lookup is retried next time.
+ */
+function serviceAccountId(auth: string): Promise<number | null> {
+  serviceAccount ??= fetch(`https://${ZENDESK_DOMAIN}/api/v2/users/me.json`, {
+    headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/json' },
+  })
+    .then(async (response) => {
+      if (!response.ok) return null
+      const data = (await response.json()) as { user?: { id?: number } }
+      return data.user?.id ?? null
+    })
+    .catch(() => null)
+    .then((id) => {
+      if (id === null) serviceAccount = null
+      return id
+    })
+  return serviceAccount
 }
 
 type PublicComment = { html_body: string; public: true; author_id?: number }
@@ -240,15 +265,16 @@ export async function createTicket(options: {
     response = await fetch(`https://${ZENDESK_DOMAIN}/api/v2/tickets.json`, {
       method: 'POST',
       headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ticket: {
+      body: JSON.stringify(
+        newTicketPayload({
           subject,
+          htmlBody: toHtml(body.trim()),
           requester: { name: requesterName, email: requesterEmail },
           status,
-          group_id: groupId,
-          comment: publicComment(body, authorId),
-        },
-      }),
+          groupId,
+          authorId: authorId ?? (await serviceAccountId(auth)),
+        })
+      ),
     })
   } catch (error) {
     return { ok: false, error: `Could not reach Zendesk: ${(error as Error).message}` }
