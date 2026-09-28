@@ -1,5 +1,6 @@
 import { consultLine } from '../consultations/request.ts'
 import { orderLine } from '../labOrders/order.ts'
+import { insufficientReasonsLine } from '../labReviews/labsNotSufficient.ts'
 import { DISPOSITION_LABELS, type ReviewDraft } from '../labReviews/reviewDraft.ts'
 import { ESCALATION_TARGET_LABELS, type Escalation } from '../labReviews/needsAttention.ts'
 import type { ReviewField } from './reviewFields.ts'
@@ -31,6 +32,9 @@ export function describeDecision(
   if (draft.disposition) {
     lines.push(`Disposition chosen: ${DISPOSITION_LABELS[draft.disposition]}.`)
   }
+
+  const reasons = insufficientReasonsLine(draft)
+  if (reasons) lines.push(`Why the labs cannot be accepted: ${reasons}.`)
 
   // One sentence per prescription. A model handed "testosterone and anastrozole
   // were changed" writes one plan for two doses.
@@ -113,8 +117,8 @@ export function describeDecision(
   return lines.join('\n')
 }
 
-/** Who the needs-attention note is for, so the draft is a reminder, a note for
- *  customer service, or a Handoff — not the wrong one of those. */
+/** Who the needs-attention note is for, so the draft is a reminder or a Handoff —
+ *  not the wrong one of those. */
 export function describeEscalation(escalation: Escalation): string {
   const lines: string[] = []
 
@@ -130,12 +134,6 @@ export function describeEscalation(escalation: Escalation): string {
       .map((t) => ESCALATION_TARGET_LABELS[t])
       .join(' and ')}.`
   )
-
-  if (escalation.targets.includes('customer_service')) {
-    lines.push(
-      'The customer service reader is not a clinician. Describe what to arrange, ask, or relay — never what to prescribe.'
-    )
-  }
 
   return lines.join('\n')
 }

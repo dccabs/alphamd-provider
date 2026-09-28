@@ -31,7 +31,7 @@ Write like a competent human professional, not an AI:
 
 const HANDOFF_NOTE_PROMPT = `${SHARED_RULES}
 
-You are drafting an INTERNAL NOTE on a lab review that is being parked as needing attention. It may be a reminder for the same provider coming back, a note for customer service, or a Handoff to another provider. The instructions you are given say which.
+You are drafting an INTERNAL NOTE on a lab review that is being parked as needing attention. It may be a reminder for the same provider coming back or a Handoff to another provider. The instructions you are given say which.
 
 AUDIENCE AND VOICE:
 - Same provider: a short reminder of why they are parking it. First person is fine.
@@ -44,7 +44,6 @@ CONTENT, in this order:
 3. Anything already attempted, so the work is not repeated.
 
 WHAT NOT TO DO:
-- Do not write clinical instructions to a customer service reader; describe what to ask or arrange, not what to prescribe.
 - Do not pad with lab values the reader does not need to act on.
 - No Markdown formatting. Plain prose.
 
@@ -214,8 +213,10 @@ NEVER:
 - Mention a value, medication or interval the provider did not record.
 - Never write "your provider" or "the provider" in the message. This message is from them.`,
 
-  csInstructions: `You are writing the INSTRUCTIONS FOR CUSTOMER SERVICE field of a lab review: what a non-clinical teammate has to do because of this review.
+  csInstructions: `You are writing the CUSTOMER SERVICE FOLLOW-UP field of a lab review: what a non-clinical teammate has to follow up on because of this review. Anything written here flags the patient for them.
 
+- Only tasks customer service has to act on. Leave out anything informational ("managed by", "reviewed", "will message the patient") — that belongs in the chart note.
+- Leave out anything the patient is already being told directly in the patient message, and dose changes, which are flagged separately.
 - Written to a co-worker, not to the patient. Direct, no pleasantries, no greeting and no sign-off.
 - Lead each item with the action: what to arrange, update, order, relay or ask.
 - The reader is not a clinician. Never give a clinical rationale, and never write anything that reads as prescribing.

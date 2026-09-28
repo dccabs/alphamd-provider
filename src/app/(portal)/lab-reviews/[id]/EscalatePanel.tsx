@@ -23,14 +23,9 @@ import type { ProviderOption } from './types'
 /**
  * The Needs Attention menu.
  *
- * Targets are optional. Leaving both unchecked parks the review for the
- * assigned provider — a note, no CS task, no handoff. Both targets can still
- * be picked at once: "CS needs to book a redraw *and* I want another provider
- * to look at this" is a real situation.
- *
- * The hint under "Customer service" says the review stays yours, because that is
- * the surprising part: escalating to CS looks like handing the work away, and it
- * deliberately does not.
+ * The target is optional. Leaving it unchecked parks the review for the
+ * assigned provider — a note, no handoff. Customer service is not offered:
+ * nothing reaches CS until the review is finalized.
  */
 export function EscalatePanel({
   reviewId,
@@ -133,8 +128,8 @@ export function EscalatePanel({
           onValueChange={(note) => setEscalation((prev) => ({ ...prev, note }))}
           placeholder="Come back after I check last month's Hct…"
         />
-        {/* describeEscalation says who the note is for — yourself, CS, or
-            another provider — because those are not the same note. */}
+        {/* describeEscalation says who the note is for — yourself or another
+            provider — because those are not the same note. */}
         <AssistButton
           reviewId={reviewId}
           task="handoff_note"

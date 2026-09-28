@@ -15,7 +15,7 @@ import {
 } from '@/components/ui/dialog'
 import { consultLine } from '@/lib/consultations/request'
 import { orderLine, scheduledDateFor } from '@/lib/labOrders/order'
-import { FLAG_LABELS, PATIENT_STATUS_LABELS } from '@/lib/labReviews/clinicalIds'
+import { FLAG, FLAG_LABELS, PATIENT_STATUS_LABELS } from '@/lib/labReviews/clinicalIds'
 import {
   chartActionLines,
   planCompletion,
@@ -25,6 +25,7 @@ import {
 import { shortDate } from '@/lib/labReviews/format'
 import { describeDecision } from '@/lib/ai/decision'
 import { DISPOSITION_LABELS, type ReviewDraft } from '@/lib/labReviews/reviewDraft'
+import { INSUFFICIENT_REASON_SHORT } from '@/lib/labReviews/labsNotSufficient'
 import { FieldAssistButton } from './FieldAssistButton'
 import { useChartSummary } from './useChartSummary'
 import { REPLY_IDENTITY_LABELS, type ReplyIdentity } from '@/lib/labReviews/replyIdentity'
@@ -84,7 +85,6 @@ type FollowUpSend =
   | { status: 'creating' }
   | {
       status: 'applied'
-      actionId: string | null
       addedFlagIds: number[]
       removedFlagIds: number[]
       warning?: string
@@ -328,7 +328,6 @@ export function FinalizeSummaryDialog({
       }
       setFollowUpSend({
         status: 'applied',
-        actionId: result.actionId,
         addedFlagIds: result.addedFlagIds,
         removedFlagIds: result.removedFlagIds,
         warning: result.warning,
@@ -456,6 +455,13 @@ export function FinalizeSummaryDialog({
           <Section title="DECISION">
             <ul className="flex flex-col gap-1 text-[13px]">
               <li>{DISPOSITION_LABELS[disposition]}</li>
+              {plan.detail.labsNotSufficient?.reasons.map((reason) => (
+                <li key={`reason-${reason}`}>
+                  {reason === 'other'
+                    ? `Other — ${plan.detail.labsNotSufficient?.other ?? ''}`
+                    : INSUFFICIENT_REASON_SHORT[reason]}
+                </li>
+              ))}
               {doseChanges.map((change) => (
                 <li key={`dose-${change.medicationId}-${change.medication}`}>
                   {change.medication} — {change.from ? `${change.from} → ` : ''}
@@ -549,10 +555,10 @@ export function FinalizeSummaryDialog({
           )}
 
           <Destination
-            title="CUSTOMER SERVICE RECEIVES"
+            title="CUSTOMER SERVICE SEES ON FLAGGED PATIENTS"
             text={audiences.customerService}
-            empty="Nothing for customer service."
-            status={<FollowUpActionStatus send={followUpSend} />}
+            empty="Nothing for customer service — the patient is not flagged for them."
+            status={<FollowUpCsStatus send={followUpSend} />}
           />
 
           <ChartRecords
@@ -777,9 +783,9 @@ function ApprovalProgress({
     },
     {
       key: 'cs',
-      running: 'Checking for a customer service action',
-      done: 'Customer service action created',
-      skipped: 'No customer service action',
+      running: 'Checking what customer service needs to do',
+      done: 'Flagged for customer service',
+      skipped: 'Nothing for customer service',
       state:
         followUp.status === 'idle'
           ? 'waiting'
@@ -787,7 +793,7 @@ function ApprovalProgress({
             ? 'running'
             : followUp.status === 'error'
               ? 'error'
-              : followUp.status === 'applied' && followUp.actionId
+              : followUp.status === 'applied' && flagsForCs(followUp.addedFlagIds)
                 ? 'done'
                 : 'skipped',
       detail: followUp.status === 'error' ? followUp.message : undefined,
@@ -1109,7 +1115,13 @@ function ChartNoteStatus({ send }: { send: ChartNoteSend }) {
   )
 }
 
-function FollowUpActionStatus({ send }: { send: FollowUpSend }) {
+/** Follow Up Required is the flag that means CS has something to do; Dose
+ *  Change never goes on without it. */
+function flagsForCs(addedFlagIds: number[]): boolean {
+  return addedFlagIds.includes(FLAG.followUpRequired)
+}
+
+function FollowUpCsStatus({ send }: { send: FollowUpSend }) {
   if (send.status === 'idle') return null
 
   if (send.status === 'creating') {
@@ -1119,7 +1131,7 @@ function FollowUpActionStatus({ send }: { send: FollowUpSend }) {
         className="flex items-center gap-1.5 text-xs text-muted-foreground"
       >
         <Loader2 className="size-3.5 animate-spin" aria-hidden />
-        Creating the customer service action…
+        Flagging the patient for customer service…
       </p>
     )
   }
@@ -1136,9 +1148,9 @@ function FollowUpActionStatus({ send }: { send: FollowUpSend }) {
     <div aria-live="polite" className="flex flex-col gap-1">
       <p className="flex items-center gap-1.5 text-xs">
         <Check className="size-3.5" aria-hidden />
-        {send.actionId
-          ? `Action created — assigned to customer service`
-          : 'Nothing to assign — no customer service action created'}
+        {flagsForCs(send.addedFlagIds)
+          ? 'Flagged for customer service — shown on Flagged Patients'
+          : 'Nothing for customer service — no flag raised'}
       </p>
       {send.warning && <p className="text-xs text-muted-foreground">{send.warning}</p>}
     </div>

@@ -369,3 +369,18 @@ test('a long summary is clamped to one line', () => {
   assert.ok(summary.length < 100)
   assert.ok(summary.endsWith('…'))
 })
+
+test('labs not sufficient starts nothing, so it skips medications and dose changes', () => {
+  const steps = stepsFor(draft({ disposition: 'labs_not_sufficient' }), 'member')
+  assert.deepEqual(steps, [
+    'labOrders',
+    'consultation',
+    'providerNote',
+    'csInstructions',
+    'patientMessage',
+  ])
+})
+
+test('the patient message is marked as the preferred way to reach the patient', () => {
+  assert.equal(STEP_TITLES.patientMessage, 'Message for patient (preferred)')
+})

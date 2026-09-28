@@ -150,7 +150,7 @@ export function dosageLabel(dosageMg: number, custom?: string | null): string {
  * of whoever happened to click the button. It matches the default alphamd uses
  * server-side elsewhere, in `prescriptionDocument.ts`.
  */
-const CLINIC_TIME_ZONE = 'America/Los_Angeles'
+export const CLINIC_TIME_ZONE = 'America/Los_Angeles'
 
 /** Today's calendar date where the clinic is, whatever the server's clock says. */
 function clinicToday(now: Date): { year: number; month: number; day: number } {

@@ -250,20 +250,12 @@ describe('describeDecision', () => {
 })
 
 describe('describeEscalation', () => {
-  it('names the recipients', () => {
-    const described = describeEscalation({
-      ...EMPTY_ESCALATION,
-      targets: ['customer_service', 'provider'],
-    })
-    assert.match(described, /Customer service and Another provider/)
+  it('names the recipient', () => {
+    const described = describeEscalation({ ...EMPTY_ESCALATION, targets: ['provider'] })
+    assert.match(described, /handed to: Another provider\./)
   })
 
-  it('warns off clinical instructions when customer service is a recipient', () => {
-    const described = describeEscalation({ ...EMPTY_ESCALATION, targets: ['customer_service'] })
-    assert.match(described, /not a clinician/)
-  })
-
-  it('says nothing extra for a provider-only handoff', () => {
+  it('says nothing extra for a provider handoff', () => {
     const described = describeEscalation({ ...EMPTY_ESCALATION, targets: ['provider'] })
     assert.doesNotMatch(described, /not a clinician/)
   })

@@ -20,6 +20,10 @@ _Avoid_: Case, ticket, task
 The clinical decision recorded when a Lab Review is finished. Which options are offered depends on whether the Patient is still Onboarding or is already a Member.
 _Avoid_: Resolution, outcome, status (status is the queue column)
 
+**Labs not sufficient**:
+A Disposition, offered to Onboarding and Member Patients, for a lab report that cannot be accepted for review: missing markers, no name, no birthday, older than 90 days, looks altered, or Other. The chosen reasons prefill the chart note and a message telling the Patient, without accusation, why the report cannot be used. It does not change the Patient's status.
+_Avoid_: Rejected labs, invalid labs, bad labs
+
 **Needs attention**:
 A Lab Review parked before a Disposition is recorded. It stays with the assigned Provider unless they handed it to another Provider.
 _Avoid_: Escalated (that means someone else has work), on hold, flagged
@@ -71,6 +75,14 @@ _Avoid_: Amount (the pricing modal's word), concentration
 **Analyte**:
 One extracted lab value on a Lab Review: a name and the display string from the report.
 _Avoid_: Chip, result (when this extracted row is meant)
+
+**Patient Flag**:
+A label on a Patient that puts them on the admin app's Flagged Patients list for staff to act on (Follow Up Required, Dose Change, and the rest). It may carry a note saying what needs doing; the flag stays until someone removes it, which is how that work is closed.
+_Avoid_: Clinic flag (a highlight on an Analyte), Action, tag, alert
+
+**Action**:
+A task on the admin app's Actions board. A Lab Review never creates one: what customer service has to do after a review is written on a Patient Flag.
+_Avoid_: Task, to-do, ticket, Patient Flag
 
 **Clinic flag**:
 A yellow or red highlight on an Analyte when its value crosses an AlphaMD threshold. A prompt for the Provider to look, not a Disposition.

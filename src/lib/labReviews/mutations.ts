@@ -5,7 +5,6 @@ import { consultProblems, requestConsultation } from '@/lib/consultations/mutati
 import type { ConsultRequest } from '@/lib/consultations/request'
 import { labOrderProblems, scheduleLabOrder } from '@/lib/labOrders/mutations'
 import { orderWhen, type LabOrder } from '@/lib/labOrders/order'
-import { addPatientFlag } from '@/lib/patients/flags'
 import {
   handoffLines,
   planProtocolFor,
@@ -15,7 +14,6 @@ import {
 } from '@/lib/protocols/mutations'
 import { protocolOutcome, type ProtocolPlan } from '@/lib/protocols/protocolPlan'
 import { createAdminClient } from '@/lib/supabase/admin'
-import { FLAG } from './clinicalIds'
 import { draftPricing } from './discountSeed'
 import {
   planCompletion,
@@ -23,6 +21,7 @@ import {
   type CompletionPlan,
 } from './completion'
 import { logLabReviewEvent, resolveActor, type Actor } from './events'
+import { applyReviewFlags } from './reviewFlags'
 import {
   summarizeNeedsAttention,
   transfersOwnership,
@@ -397,7 +396,7 @@ export async function completeLabReview(
     return { ok: false, error: 'This review was finished by somebody else. Reload the page.' }
   }
 
-  const warnings = await applySideEffects(access, review.patientId, plan)
+  const warnings = await applySideEffects(access, reviewId, review.patientId, plan, actor.displayName)
   warnings.push(...(await placeLabOrders(access, reviewId, draft.labOrders)))
   warnings.push(...(await sendConsultInvite(access, reviewId, draft.consultation)))
 
@@ -443,7 +442,7 @@ export async function completeLabReview(
 
 /**
  * Mark the review finished after Approve has already sent the protocol, the
- * patient message, the customer service action, and the chart note.
+ * patient message, the customer service flags, and the chart note.
  *
  * Those writes must not run again here — a second protocol email, chart note,
  * lab order, or consultation invitation is the failure this exists to prevent.
@@ -685,27 +684,19 @@ async function sendRecommendedProtocol(
  */
 async function applySideEffects(
   access: ProviderAccess,
+  reviewId: string,
   patientId: string,
-  plan: CompletionPlan
+  plan: CompletionPlan,
+  providerName: string
 ): Promise<string[]> {
   const admin = createAdminClient()
-  const warnings: string[] = []
-
-  if (plan.removeFlagIds.length) {
-    // Deleted, not deactivated — mirroring the main app, where this flag carries
-    // no history and `lab_reviews` is the record.
-    const { error } = await admin
-      .from('user_flags_join')
-      .delete()
-      .eq('patient_id', patientId)
-      .in('flag_id', plan.removeFlagIds)
-    if (error) warnings.push('the "Needs lab review" flag could not be cleared')
-  }
-
-  for (const flagId of plan.addFlagIds) {
-    const added = await addPatientFlag(patientId, flagId, access.userId)
-    if (!added) warnings.push(`flag ${flagId} could not be added`)
-  }
+  const { warnings } = await applyReviewFlags({
+    reviewId,
+    patientId,
+    staffUserId: access.userId,
+    providerName,
+    plan,
+  })
 
   if (plan.patientStatusId !== null) {
     const { error } = await admin
@@ -728,21 +719,20 @@ async function applySideEffects(
 }
 
 /**
- * Park a review as needing attention, for the assigned provider, customer
- * service, another provider, or a combination.
+ * Park a review as needing attention, for the assigned provider or as a Handoff
+ * to another provider.
  *
  * Ordering, and why: the review row moves to `needs_attention` first, then the
- * routing side effects run. Same reasoning as completion — no transaction spans
+ * handoff note is written. Same reasoning as completion — no transaction spans
  * these tables, so the review row is the one place that records the whole
  * intent, and a failed side effect is reported rather than pretending the
  * park did not happen.
  *
  * **No targets is a self-park.** The review stays assigned (or is claimed if it
- * was unassigned). No CS task, no patient flag.
+ * was unassigned).
  *
- * **Customer service does not take the review.** `assigned_to` is left alone on
- * the CS route, per the doc: CS cannot make the clinical decision that closes a
- * review, so handing them the row would strand it.
+ * **Nothing reaches customer service from here.** CS is only involved once a
+ * review is finalized, through the flags it raises.
  */
 export async function escalateLabReview(
   access: ProviderAccess,
@@ -778,8 +768,8 @@ export async function escalateLabReview(
       needs_attention_by: access.userId,
       needs_attention_targets: escalation.targets,
       // Unassigned reviews get claimed by whoever parked them, so a parked
-      // review always names somebody clinical. Self-park and the CS route
-      // deliberately do not move an existing assignment.
+      // review always names somebody clinical. A self-park deliberately does
+      // not move an existing assignment.
       assigned_to: handingTo ?? review.assignedTo ?? access.userId,
       updated_at: now,
     })
@@ -803,10 +793,6 @@ export async function escalateLabReview(
     kind: 'handoff',
   })
   if (noteError) warnings.push('the handoff note could not be saved')
-
-  if (escalation.targets.includes('customer_service')) {
-    warnings.push(...(await routeToCustomerService(access, review, note, actor.displayName)))
-  }
 
   const handedToName = handingTo ? await nameOf(handingTo) : null
 
@@ -832,71 +818,6 @@ export async function escalateLabReview(
     }
   }
   return { ok: true }
-}
-
-/**
- * Create the customer service task and point the review at it.
- *
- * `cs_action_id` already had a foreign key to `actions` before this portal wrote
- * anything, so the plumbing is pre-existing — this fills it in. Status and
- * priority are resolved **by name** rather than by hardcoded uuid, matching the
- * main app, so a differently seeded environment still works.
- */
-async function routeToCustomerService(
-  access: ProviderAccess,
-  review: ReviewGuardRow,
-  note: string,
-  providerName: string
-): Promise<string[]> {
-  const admin = createAdminClient()
-  const warnings: string[] = []
-
-  const [statusRow, priorityRow, csRole] = await Promise.all([
-    admin.from('actions_statuses').select('id').eq('name', 'New').maybeSingle(),
-    admin.from('actions_priorities').select('id').eq('name', 'Normal').maybeSingle(),
-    admin.from('user_roles').select('id').eq('role', 'customer_service').maybeSingle(),
-  ])
-
-  const statusId = statusRow.data?.id
-  const priorityId = priorityRow.data?.id
-  const groupId = csRole.data?.id
-
-  if (!statusId || !priorityId || !groupId) {
-    return ['the customer service task could not be created (status, priority or group missing)']
-  }
-
-  const { data: action, error: actionError } = await admin
-    .from('actions')
-    .insert({
-      title: 'Lab review needs customer service',
-      description: `${providerName} escalated a lab review.\n\n${note}`,
-      patient_user_id: review.patientId,
-      created_by_user_id: access.userId,
-      assignee_group_id: Number(groupId),
-      status_id: statusId,
-      priority_id: priorityId,
-    })
-    .select('id')
-    .maybeSingle()
-
-  if (actionError || !action) {
-    return [`the customer service task could not be created (${actionError?.message ?? 'unknown'})`]
-  }
-
-  const { error: linkError } = await admin
-    .from('lab_reviews')
-    .update({ cs_action_id: action.id, updated_at: new Date().toISOString() })
-    .eq('id', review.id)
-  if (linkError) {
-    warnings.push('the customer service task was created but is not linked to this review')
-  }
-
-  // "Follow Up Required" is what makes the escalation visible outside this review,
-  // on the patient's own record.
-  const flagged = await addPatientFlag(review.patientId, FLAG.followUpRequired, access.userId)
-  if (!flagged) warnings.push('the "Follow Up Required" flag could not be added')
-
-  return warnings
 }
 
 /** Read from `user_roles_join`, never `user_list.role` — same reason as
