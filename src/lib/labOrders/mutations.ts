@@ -134,6 +134,23 @@ export async function scheduleLabOrder(
   const immediate = order.timing === 'now'
   const admin = createAdminClient()
 
+  // A draft saved before a provider was retired still carries their id.
+  const { data: provider, error: providerError } = await admin
+    .from('lab_providers')
+    .select('id')
+    .eq('id', order.providerId)
+    .eq('is_active', true)
+    .maybeSingle()
+  if (providerError) {
+    return { ok: false, error: `Could not check the ordering provider: ${providerError.message}` }
+  }
+  if (!provider) {
+    return {
+      ok: false,
+      error: 'That ordering provider is no longer active. Choose another provider.',
+    }
+  }
+
   const { data: inserted, error } = await admin
     .from('scheduled_lab_requisitions')
     .insert({

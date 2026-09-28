@@ -18,12 +18,14 @@ export type LabProviderOption = {
   npi: string | null
 }
 
+/** Active signing providers only: `is_active = false` retires one from new orders. */
 export async function listLabProviders(): Promise<LabProviderOption[]> {
   const admin = createAdminClient()
 
   const { data, error } = await admin
     .from('lab_providers')
     .select('id, name, npi')
+    .eq('is_active', true)
     .order('name', { ascending: true })
   if (error) throw new Error(`lab_providers query failed: ${error.message}`)
 
