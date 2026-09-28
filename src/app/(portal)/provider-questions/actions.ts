@@ -2,9 +2,12 @@
 
 import { revalidatePath } from 'next/cache'
 
+import { writeQuestionRecap } from '@/lib/ai/questionRecap'
 import { checkProviderAccess } from '@/lib/authz'
+import { createAdminClient } from '@/lib/supabase/admin'
 import { cancelScheduledLabOrder } from '@/lib/labOrders/mutations'
 import { parseAnswerDraft } from '@/lib/providerQuestions/answerDraft'
+import { signProviderQuestionAttachment } from '@/lib/providerQuestions/attachments'
 import {
   finishProviderQuestion,
   saveAnswerDraft,
@@ -26,6 +29,27 @@ function revalidateQuestion(id: string) {
   revalidatePath(`/provider-questions/${id}`)
   revalidatePath('/provider-questions')
   revalidatePath('/')
+}
+
+/**
+ * The patient-facing restatement of a question, for the Finish preview. Read
+ * from the row, not taken from the browser, so only the stored question is
+ * ever sent to the model.
+ */
+export async function questionRecapAction(
+  id: string
+): Promise<{ ok: true; recap: string } | { ok: false; error: string }> {
+  const access = await checkProviderAccess()
+  if (!access.ok) return { ok: false, error: DENIED }
+
+  const { data, error } = await createAdminClient()
+    .from('provider_questions')
+    .select('question')
+    .eq('id', id)
+    .maybeSingle()
+  if (error || !data) return { ok: false, error: 'Could not load this Provider Question.' }
+
+  return { ok: true, recap: await writeQuestionRecap((data.question as string | null) ?? '') }
 }
 
 /** Take-to-self: queued or someone else's in-progress row becomes mine. */
@@ -68,6 +92,18 @@ export async function cancelLabOrderAction(
 
   revalidateQuestion(id)
   return { status: 'ok', warning: result.warning }
+}
+
+/** A short-lived link to one of this question's attachments. */
+export async function openAttachmentAction(
+  id: string,
+  attachmentId: string
+): Promise<{ ok: true; url: string } | { ok: false; error: string }> {
+  const access = await checkProviderAccess()
+  if (!access.ok) return { ok: false, error: DENIED }
+
+  const url = await signProviderQuestionAttachment(id, attachmentId)
+  return url ? { ok: true, url } : { ok: false, error: 'Could not open this attachment.' }
 }
 
 /**

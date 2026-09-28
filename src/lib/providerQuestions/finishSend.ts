@@ -1,5 +1,6 @@
 import 'server-only'
 
+import { writeQuestionRecap } from '@/lib/ai/questionRecap'
 import type { ProviderAccess } from '@/lib/authz'
 import { consultProblems, requestConsultation } from '@/lib/consultations/mutations'
 import { labOrderProblems, scheduleLabOrder } from '@/lib/labOrders/mutations'
@@ -133,6 +134,8 @@ export async function finishProviderQuestion(
     ticketId: (full.zendesk_ticket_id as string | null) ?? null,
     question,
     answer: draft.patientMessage,
+    firstName: (patient.first_name as string | null) ?? null,
+    questionRecap: draft.questionRecap,
     patient: {
       name: [patient.first_name, patient.last_name].filter(Boolean).join(' ').trim(),
       email: (patient.email as string | null) ?? null,
@@ -255,12 +258,18 @@ type Delivered =
  * Reply on the linked ticket; fall back to a new ticket when there is none or
  * the reply is refused. The fallback body restates the question, so the two
  * paths are planned separately rather than the second reusing the first.
+ *
+ * A new ticket that was previewed carries the recap the provider approved. One
+ * that only exists because a reply failed was never previewed as a letter, so
+ * its recap is written here.
  */
 async function deliverAnswer(input: {
   access: ProviderAccess
   ticketId: string | null
   question: string
   answer: string
+  firstName: string | null
+  questionRecap: string
   patient: { name: string; email: string | null }
 }): Promise<Delivered> {
   const first = planAnswerDelivery(input)
@@ -294,7 +303,12 @@ async function deliverAnswer(input: {
     }
   }
 
-  const fallback = planAnswerDelivery({ ...input, replyFailed: true })
+  const fallback = planAnswerDelivery({
+    ...input,
+    questionRecap:
+      first.kind === 'reply' ? await writeQuestionRecap(input.question) : input.questionRecap,
+    replyFailed: true,
+  })
   if (fallback.kind !== 'new-ticket') {
     return { ok: false, error: 'Could not plan where to send the answer.' }
   }

@@ -27,6 +27,9 @@ export type AnswerDraft = {
   csInstructions: string
   /** AI summary of what the provider did, written when Finish opens. */
   chartSummary: string
+  /** AI restatement of the question for a new-ticket answer, written when
+   *  Finish opens. Empty means the letter does not restate it. */
+  questionRecap: string
 }
 
 export const EMPTY_ANSWER_DRAFT: AnswerDraft = {
@@ -37,6 +40,7 @@ export const EMPTY_ANSWER_DRAFT: AnswerDraft = {
   followUp: false,
   csInstructions: '',
   chartSummary: '',
+  questionRecap: '',
 }
 
 function str(value: unknown): string {
@@ -74,7 +78,25 @@ export function parseAnswerDraft(json: unknown): AnswerDraft {
     followUp: raw.followUp === true,
     csInstructions: str(raw.csInstructions),
     chartSummary: str(raw.chartSummary),
+    questionRecap: str(raw.questionRecap),
   }
+}
+
+/**
+ * What the draft holds besides the message, named for a sentence. The inline
+ * reply sends the message only, so anything here has to go through the Answer
+ * panel or it would be sent without the provider seeing it.
+ */
+export function toolkitItems(draft: AnswerDraft): string[] {
+  const items: string[] = []
+  if (draft.doseChanges.some((c) => c.medication.trim() || c.value.trim())) {
+    items.push('a dose change')
+  }
+  if (draft.labOrders.length) items.push('labs')
+  if (draft.consultation) items.push('a consultation')
+  if (draft.followUp) items.push('follow-up')
+  if (draft.csInstructions.trim()) items.push('a request to customer service')
+  return items
 }
 
 export function isAnswerDraftEmpty(draft: AnswerDraft): boolean {

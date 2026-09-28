@@ -360,10 +360,12 @@ export function AnswerModal({
             zendeskTicketId={zendeskTicketId}
             draft={draft}
             patientName={patientName}
+            patientFirstName={patientFirstName}
             patientEmail={patientEmail}
             providerName={providerName}
             onEdit={() => setFinishing(false)}
             onChartSummary={(chartSummary) => update({ chartSummary })}
+            onQuestionRecap={(questionRecap) => update({ questionRecap })}
             onFinished={(warning) => {
               unsaved.current = false
               onFinished(warning)

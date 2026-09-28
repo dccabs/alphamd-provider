@@ -47,15 +47,6 @@ export function validateFinish(draft: AnswerDraft): string[] {
   return problems
 }
 
-/** A question short enough for a ticket body. Whole words, one ellipsis. */
-export function questionSummary(question: string, max = 240): string {
-  const text = question.trim().replace(/\s+/g, ' ')
-  if (text.length <= max) return text
-  const cut = text.slice(0, max)
-  const atWord = cut.lastIndexOf(' ')
-  return `${(atWord > max * 0.6 ? cut.slice(0, atWord) : cut).trimEnd()}…`
-}
-
 export type AnswerDelivery =
   | { kind: 'reply'; ticketId: string; body: string }
   | {
@@ -71,13 +62,15 @@ export type AnswerDelivery =
  *
  * A linked ticket gets the answer as a reply, verbatim, because the patient's
  * own question is already in that thread. No ticket — or a reply that could not
- * post — gets a new ticket that restates the question first, so the words make
- * sense arriving cold.
+ * post — gets a new ticket written as a whole letter, so the words make sense
+ * arriving cold. The letter restates the question only through `questionRecap`
+ * (see `questionRecap.ts`); the staff-written question text never goes in.
  */
 export function planAnswerDelivery(input: {
   ticketId: string | null
-  question: string
   answer: string
+  firstName?: string | null
+  questionRecap?: string
   replyFailed?: boolean
 }): AnswerDelivery {
   const answer = input.answer.trim()
@@ -85,12 +78,20 @@ export function planAnswerDelivery(input: {
 
   if (ticketId && !input.replyFailed) return { kind: 'reply', ticketId, body: answer }
 
+  const recap = input.questionRecap?.trim()
   return {
     kind: 'new-ticket',
     subject: ANSWER_TICKET_SUBJECT,
     status: ANSWER_TICKET_STATUS,
     groupId: ANSWER_TICKET_GROUP_ID,
-    body: `You asked: ${questionSummary(input.question)}\n\n${answer}`,
+    body: [
+      `Hi ${input.firstName?.trim() || 'there'},`,
+      ...(recap ? ['We received your question:', recap] : ['We received your question.']),
+      'Provider answer:',
+      answer,
+      'Please reply to this message if you have more questions or concerns.',
+      'Thank you,\nAlphaMD Support',
+    ].join('\n\n'),
   }
 }
 

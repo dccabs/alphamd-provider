@@ -1,9 +1,9 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { useEffect, useRef, useState, useTransition } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { Check, ChevronLeft, Flame, MessageCircleQuestion } from 'lucide-react'
+import { Check, ChevronLeft, Flame, MessageCircleQuestion, Paperclip } from 'lucide-react'
 
 import { PatientStatusPill } from '@/components/patient-status'
 import { PortalChrome } from '@/components/portal-chrome'
@@ -14,6 +14,7 @@ import type { Consultation } from '@/lib/labReviews/consultations'
 import { shortDate, shortDateTime } from '@/lib/labReviews/format'
 import type { Note } from '@/lib/labReviews/notes'
 import type { AnswerDraft } from '@/lib/providerQuestions/answerDraft'
+import type { QuestionAttachment } from '@/lib/providerQuestions/attachmentView'
 import { isAged, type ProviderQuestionStatus } from '@/lib/providerQuestions/queueRow'
 
 import { signFileAction } from '../../lab-reviews/actions'
@@ -32,10 +33,13 @@ import type {
 } from '../../lab-reviews/[id]/types'
 import {
   cancelLabOrderAction,
+  openAttachmentAction,
+  saveAnswerDraftAction,
   setUrgentAction,
   takeProviderQuestionAction,
 } from '../actions'
 import { AnswerModal } from './AnswerModal'
+import { InlineReply } from './InlineReply'
 import { QuestionSummary } from './QuestionSummary'
 
 /**
@@ -57,6 +61,7 @@ export function ProviderQuestionScreen({
   status,
   question,
   csComments,
+  attachments,
   urgent,
   zendeskTicketId,
   assignedTo,
@@ -83,15 +88,13 @@ export function ProviderQuestionScreen({
   files,
   cs,
   consultations,
-  initialFile,
-  initialSignedUrl,
-  initialSignError,
 }: {
   questionId: string
   header: PatientHeader
   status: ProviderQuestionStatus
   question: string
   csComments: string | null
+  attachments: QuestionAttachment[]
   urgent: boolean
   zendeskTicketId: string | null
   assignedTo: string | null
@@ -118,14 +121,13 @@ export function ProviderQuestionScreen({
   files: PatientFile[]
   cs: CsInbox
   consultations: Consultation[]
-  initialFile: PatientFile | null
-  initialSignedUrl: string | null
-  initialSignError: string | null
 }) {
-  const [shownFile, setShownFile] = useState<PatientFile | null>(initialFile)
-  const [signedUrl, setSignedUrl] = useState<string | null>(initialSignedUrl)
-  const [signError, setSignError] = useState<string | null>(initialSignError)
+  const [shownFile, setShownFile] = useState<PatientFile | null>(null)
+  const [signedUrl, setSignedUrl] = useState<string | null>(null)
+  const [signError, setSignError] = useState<string | null>(null)
+  const viewerRef = useRef<HTMLDivElement>(null)
   const [answerOpen, setAnswerOpen] = useState(false)
+  const [answerSeed, setAnswerSeed] = useState<string | null>(null)
   const [write, setWrite] = useState<WriteState>(IDLE)
   const [pending, startTransition] = useTransition()
   const router = useRouter()
@@ -144,6 +146,21 @@ export function ProviderQuestionScreen({
       else setSignError(result.error)
     })
   }
+
+  const hideFile = () => {
+    setShownFile(null)
+    setSignedUrl(null)
+    setSignError(null)
+  }
+
+  // The viewer sits under the question, often below the fold when the sidebar
+  // button that opened it is still in view.
+  const shownFileId = shownFile?.id ?? null
+  useEffect(() => {
+    if (shownFileId !== null) {
+      viewerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }
+  }, [shownFileId])
 
   /** Take-to-self, then open the flyout — but only once the take succeeded. */
   const takeAndAnswer = () => {
@@ -166,9 +183,37 @@ export function ProviderQuestionScreen({
     })
   }
 
+  /** From the inline reply: carry its message into the panel, taking first if needed. */
+  const openAnswerWith = (message: string) => {
+    setWrite(IDLE)
+    startTransition(async () => {
+      if (!mine) {
+        const taken = await takeProviderQuestionAction(questionId)
+        setWrite(taken)
+        if (taken.status === 'error') return
+      }
+      if (message !== draft.patientMessage) {
+        const saved = await saveAnswerDraftAction(
+          questionId,
+          JSON.stringify({ ...draft, patientMessage: message })
+        )
+        if (saved.status === 'error') setWrite(saved)
+      }
+      setAnswerSeed(message)
+      router.refresh()
+      setAnswerOpen(true)
+    })
+  }
+
   const closeAnswer = () => {
     setAnswerOpen(false)
+    setAnswerSeed(null)
     router.refresh()
+  }
+
+  const finishedWith = (warning?: string) => {
+    setWrite(warning ? { status: 'ok', warning } : { status: 'ok' })
+    closeAnswer()
   }
 
   const cancelOrder = (scheduledId: string) => {
@@ -321,17 +366,49 @@ export function ProviderQuestionScreen({
         <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-[1fr_400px] xl:items-stretch">
           <div className="overflow-hidden rounded-xl border bg-card">
             <QuestionCard
+              questionId={questionId}
               question={question}
               csComments={csComments}
+              attachments={attachments}
               finished={finished}
               resolution={resolution}
               answer={answer}
               zendeskTicketId={zendeskTicketId}
             />
-            <DocumentViewer file={shownFile} signedUrl={signedUrl} error={signError} />
+            {!finished && !answerOpen && (
+              <InlineReply
+                key={draftUpdatedAt ?? 'none'}
+                questionId={questionId}
+                question={question}
+                csComments={csComments}
+                zendeskTicketId={zendeskTicketId}
+                patientName={header.name}
+                patientFirstName={header.firstName}
+                patientEmail={header.email}
+                providerName={viewerName}
+                draft={draft}
+                mine={mine}
+                assignedToName={assignedToName}
+                queued={status === 'queued'}
+                onOpenAnswer={openAnswerWith}
+                onFinished={finishedWith}
+              />
+            )}
+            {shownFile && (
+              <div ref={viewerRef} className="scroll-mt-4">
+                <DocumentViewer
+                  file={shownFile}
+                  signedUrl={signedUrl}
+                  error={signError}
+                  onClose={hideFile}
+                />
+              </div>
+            )}
           </div>
 
-          <div className="xl:relative">
+          {/* The tabs fill this box absolutely, so it needs its own height while no
+              file is open and the question card alone would set the row. */}
+          <div className="xl:relative xl:min-h-[720px]">
             <DetailTabs
               reviewId={questionId}
               notes={notes}
@@ -342,8 +419,9 @@ export function ProviderQuestionScreen({
               cs={cs}
               events={events}
               reviewNotes={[]}
-              shownFileId={shownFile?.id ?? null}
+              shownFileId={shownFileId}
               onShowFile={showFile}
+              filesHint="Files display in the main column when selected."
               activityTitle="Question history"
             />
           </div>
@@ -370,13 +448,10 @@ export function ProviderQuestionScreen({
           consultations={consultations}
           cancellingLabOrder={pending}
           onCancelScheduledLab={cancelOrder}
-          initialDraft={draft}
+          initialDraft={answerSeed === null ? draft : { ...draft, patientMessage: answerSeed }}
           draftUpdatedAt={draftUpdatedAt}
           onClose={closeAnswer}
-          onFinished={(warning) => {
-            setWrite(warning ? { status: 'ok', warning } : { status: 'ok' })
-            closeAnswer()
-          }}
+          onFinished={finishedWith}
         />
       )}
     </>
@@ -389,15 +464,19 @@ export function ProviderQuestionScreen({
  * finished, the answer sits under it so the record reads whole.
  */
 function QuestionCard({
+  questionId,
   question,
   csComments,
+  attachments,
   finished,
   resolution,
   answer,
   zendeskTicketId,
 }: {
+  questionId: string
   question: string
   csComments: string | null
+  attachments: QuestionAttachment[]
   finished: boolean
   resolution: string | null
   answer: string | null
@@ -426,6 +505,10 @@ function QuestionCard({
         </div>
       )}
 
+      {attachments.length > 0 && (
+        <AttachmentList questionId={questionId} attachments={attachments} />
+      )}
+
       {finished && (
         <div className="rounded-md border border-green-200 bg-green-50 px-3.5 py-2.5">
           <p className="text-[11px] font-bold tracking-wider text-green-900 uppercase">
@@ -437,5 +520,104 @@ function QuestionCard({
         </div>
       )}
     </section>
+  )
+}
+
+function formatSize(bytes: number | null): string | null {
+  if (bytes == null) return null
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+/**
+ * What customer service attached for the provider. Each file says where it
+ * came from. Zendesk files link straight to Zendesk; uploads are signed on
+ * click, so a page left open for hours still opens them.
+ */
+function AttachmentList({
+  questionId,
+  attachments,
+}: {
+  questionId: string
+  attachments: QuestionAttachment[]
+}) {
+  const [error, setError] = useState<string | null>(null)
+  const [opening, setOpening] = useState<string | null>(null)
+
+  const openUpload = async (attachment: QuestionAttachment) => {
+    setError(null)
+    setOpening(attachment.id)
+    // Opened before the await: a window opened after it is a popup the browser blocks.
+    const tab = window.open('about:blank', '_blank')
+    try {
+      const result = await openAttachmentAction(questionId, attachment.id)
+      if (result.ok && tab) {
+        tab.opener = null
+        tab.location.href = result.url
+      } else {
+        tab?.close()
+        setError(result.ok ? 'Allow pop-ups for this site to open attachments.' : result.error)
+      }
+    } catch {
+      tab?.close()
+      setError('Could not open this attachment.')
+    } finally {
+      setOpening(null)
+    }
+  }
+
+  return (
+    <div className="rounded-md border border-violet-200 bg-card px-3.5 py-2.5">
+      <p className="text-[11px] font-bold tracking-wider text-muted-foreground uppercase">
+        Attachments · for you, not sent to the patient
+      </p>
+      <ul className="mt-1.5 flex flex-col gap-1">
+        {attachments.map((attachment) => {
+          const size = formatSize(attachment.sizeBytes)
+          const label = (
+            <>
+              <Paperclip className="size-3.5 shrink-0 text-muted-foreground" />
+              <span className="truncate font-medium">{attachment.fileName}</span>
+              {size && <span className="shrink-0 text-xs text-muted-foreground">{size}</span>}
+            </>
+          )
+          const linkClass =
+            'flex min-w-0 items-center gap-1.5 text-left text-[13px] text-primary hover:underline disabled:opacity-60'
+          return (
+            <li key={attachment.id} className="flex items-center justify-between gap-3">
+              {attachment.href ? (
+                <a href={attachment.href} target="_blank" rel="noreferrer" className={linkClass}>
+                  {label}
+                </a>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => openUpload(attachment)}
+                  disabled={opening === attachment.id}
+                  className={linkClass}
+                >
+                  {label}
+                </button>
+              )}
+              <Badge
+                variant="outline"
+                className={
+                  attachment.source === 'zendesk'
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                    : 'border-blue-200 bg-blue-50 text-blue-800'
+                }
+              >
+                {attachment.mark}
+              </Badge>
+            </li>
+          )
+        })}
+      </ul>
+      {error && (
+        <p role="alert" className="mt-1.5 text-xs font-medium text-destructive">
+          {error}
+        </p>
+      )}
+    </div>
   )
 }

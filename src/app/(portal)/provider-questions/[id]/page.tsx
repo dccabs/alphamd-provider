@@ -5,7 +5,6 @@ import { checkProviderAccess } from '@/lib/authz'
 import { listLabProviders, listScheduledLabOrders } from '@/lib/labOrders/queries'
 import { resolveActor } from '@/lib/labReviews/events'
 import { getDosageOptions, getMedications, getPatientHeader } from '@/lib/labReviews/queries'
-import { signLabFile } from '@/lib/labReviews/storage'
 import {
   getConsultations,
   getCsThreads,
@@ -13,6 +12,7 @@ import {
   getNotes,
   getOrders,
 } from '@/lib/labReviews/tabs'
+import { listProviderQuestionAttachments } from '@/lib/providerQuestions/attachments'
 import { listProviderQuestionEvents } from '@/lib/providerQuestions/events'
 import { getProviderQuestion } from '@/lib/providerQuestions/queries'
 
@@ -24,8 +24,7 @@ export const dynamic = 'force-dynamic'
 /**
  * Same data as the Lab Review page minus the report: the question is the
  * thing under review, so there is no AI summary, no analytes and no source
- * file. The viewer opens on the patient's newest lab file, which is the
- * document most questions are about.
+ * file. No document is shown until the provider picks one from the Files tab.
  */
 export default async function ProviderQuestionDetailPage({
   params,
@@ -59,6 +58,7 @@ export default async function ProviderQuestionDetailPage({
     scheduledLabs,
     dosageOptions,
     actor,
+    attachments,
   ] = await Promise.all([
     getPatientHeader(question.patientId),
     getNotes(question.patientId),
@@ -72,12 +72,10 @@ export default async function ProviderQuestionDetailPage({
     listScheduledLabOrders(question.patientId),
     getDosageOptions(),
     resolveActor(access.access),
+    listProviderQuestionAttachments(id),
   ])
 
   if (!header) notFound()
-
-  const initialFile = files.find((f) => f.path.startsWith('original-test-results/')) ?? null
-  const initialSignedUrl = initialFile ? await signLabFile(initialFile.path) : null
 
   return (
     <ProviderQuestionScreen
@@ -86,6 +84,7 @@ export default async function ProviderQuestionDetailPage({
       status={question.status}
       question={question.question}
       csComments={question.csComments}
+      attachments={attachments}
       urgent={question.urgent}
       zendeskTicketId={question.zendeskTicketId}
       assignedTo={question.assignedTo}
@@ -112,11 +111,6 @@ export default async function ProviderQuestionDetailPage({
       files={files}
       cs={cs}
       consultations={consultations}
-      initialFile={initialFile}
-      initialSignedUrl={initialSignedUrl}
-      initialSignError={
-        initialFile && !initialSignedUrl ? 'Could not create a link for this file.' : null
-      }
     />
   )
 }

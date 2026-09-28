@@ -6,7 +6,6 @@ import {
   ANSWER_TICKET_SUBJECT,
   planAnswerDelivery,
   planFinish,
-  questionSummary,
   validateFinish,
 } from './finish.ts'
 
@@ -51,46 +50,65 @@ test('the draft has no disposition to parse and tolerates an old or empty column
   assert.deepEqual(parseAnswerDraft({ disposition: 'continue_protocol' }), EMPTY_ANSWER_DRAFT)
   assert.equal(parseAnswerDraft({ patientMessage: 'hi', followUp: true }).followUp, true)
   assert.equal(parseAnswerDraft({ patientMessage: 'hi' }).patientMessage, 'hi')
+  assert.equal(parseAnswerDraft({ questionRecap: 'You asked.' }).questionRecap, 'You asked.')
 })
 
 // ---------------------------------------------------------------------------
 // Zendesk: reply on the linked ticket, or a new ticket
 
 test('with a linked ticket the answer is a reply on that ticket, verbatim', () => {
-  assert.deepEqual(planAnswerDelivery({ ticketId: '4410', question: QUESTION, answer: 'Yes.' }), {
+  assert.deepEqual(planAnswerDelivery({ ticketId: '4410', answer: 'Yes.', questionRecap: RECAP }), {
     kind: 'reply',
     ticketId: '4410',
     body: 'Yes.',
   })
 })
 
-test('without a ticket the answer is a new ticket carrying a question summary and the answer', () => {
-  const delivery = planAnswerDelivery({ ticketId: null, question: QUESTION, answer: 'Yes.' })
+const RECAP = 'You asked whether you can move your injection day this week.'
+
+test('without a ticket the answer is a new ticket: greeting, the recap, the answer, sign-off', () => {
+  const delivery = planAnswerDelivery({
+    ticketId: null,
+    answer: ' Yes. ',
+    firstName: 'Jerry',
+    questionRecap: ` ${RECAP} `,
+  })
   assert.equal(delivery.kind, 'new-ticket')
   if (delivery.kind !== 'new-ticket') return
   assert.equal(delivery.subject, ANSWER_TICKET_SUBJECT)
-  assert.match(delivery.body, /You asked:/)
-  assert.ok(delivery.body.includes(QUESTION))
-  assert.ok(delivery.body.endsWith('Yes.'))
+  assert.equal(
+    delivery.body,
+    [
+      'Hi Jerry,',
+      'We received your question:',
+      RECAP,
+      'Provider answer:',
+      'Yes.',
+      'Please reply to this message if you have more questions or concerns.',
+      'Thank you,\nAlphaMD Support',
+    ].join('\n\n')
+  )
+})
+
+test('the question text itself is never pasted into the ticket', () => {
+  const delivery = planAnswerDelivery({ ticketId: null, answer: 'Yes.', questionRecap: RECAP })
+  assert.equal(delivery.body.includes(QUESTION), false)
+})
+
+test('with no recap the letter acknowledges the question without restating it', () => {
+  const delivery = planAnswerDelivery({ ticketId: null, answer: 'Yes.' })
+  assert.ok(delivery.body.startsWith('Hi there,\n\nWe received your question.\n\nProvider answer:'))
 })
 
 test('the fallback ticket body for a failed reply is the same new-ticket body', () => {
-  const fresh = planAnswerDelivery({ ticketId: null, question: QUESTION, answer: 'Yes.' })
+  const fresh = planAnswerDelivery({ ticketId: null, answer: 'Yes.', questionRecap: RECAP })
   const fallback = planAnswerDelivery({
     ticketId: '4410',
-    question: QUESTION,
     answer: 'Yes.',
+    questionRecap: RECAP,
     replyFailed: true,
   })
   assert.deepEqual(fallback, fresh)
-})
-
-test('a long question is summarised for the ticket, not pasted in full', () => {
-  const long = 'x'.repeat(600)
-  const summary = questionSummary(long)
-  assert.ok(summary.length < 300)
-  assert.ok(summary.endsWith('…'))
-  assert.equal(questionSummary('short'), 'short')
 })
 
 // ---------------------------------------------------------------------------

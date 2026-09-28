@@ -108,6 +108,10 @@ _Avoid_: Disposition, reply (when you mean the whole finish)
 The chart note written when a Provider Question is finished. AI summarizes what the Provider did. Staff open the Finished row from it in the admin app; the patient never sees it.
 _Avoid_: Lab Review finish note, patient Zendesk message
 
+**Provider Question Attachment**:
+A file customer service added to the question for the Provider: an upload, or a link to an attachment on the Zendesk ticket. Marked with where it came from. Never sent to the patient with the Answer.
+_Avoid_: patient file, lab document
+
 ## Dashboard
 
 The landing page after sign-in. Three things in priority order — Lab reviews, Provider Questions, Consultations — plus the Provider's Actions.
