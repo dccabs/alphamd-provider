@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
+import { FLAG } from '../labReviews/clinicalIds.ts'
 import { EMPTY_ANSWER_DRAFT, parseAnswerDraft, type AnswerDraft } from './answerDraft.ts'
 import {
   ANSWER_TICKET_SUBJECT,
@@ -48,7 +49,6 @@ test('a dose change with a medication but no dose is refused', () => {
 test('the draft has no disposition to parse and tolerates an old or empty column', () => {
   assert.deepEqual(parseAnswerDraft(null), EMPTY_ANSWER_DRAFT)
   assert.deepEqual(parseAnswerDraft({ disposition: 'continue_protocol' }), EMPTY_ANSWER_DRAFT)
-  assert.equal(parseAnswerDraft({ patientMessage: 'hi', followUp: true }).followUp, true)
   assert.equal(parseAnswerDraft({ patientMessage: 'hi' }).patientMessage, 'hi')
   assert.equal(parseAnswerDraft({ questionRecap: 'You asked.' }).questionRecap, 'You asked.')
 })
@@ -134,36 +134,57 @@ test('the events the AI summary is written from name the question, the answer an
 })
 
 // ---------------------------------------------------------------------------
-// Toolkit: CS Open Action only when requested; follow-up flag only when asked
+// Customer service: Patient Flags with notes, never an Action
 
-test('a plain answer creates no customer service action and no flag', () => {
+const ANASTROZOLE = { medicationId: 7, medication: 'Anastrozole', from: '1mg', value: '0.5mg', sig: '' }
+
+test('a plain answer raises no flag', () => {
   const p = plan()
-  assert.equal(p.csAction, null)
   assert.deepEqual(p.addFlagIds, [])
+  assert.deepEqual(p.flagNotes, {})
 })
 
-test('request from CS creates an Open Action titled as a Provider Question', () => {
-  const p = plan({ csInstructions: 'Move his next shipment out a week.' })
-  assert.deepEqual(p.csAction, {
-    title: 'Provider Question — answered',
-    description: 'Move his next shipment out a week.',
-  })
+test('a request of customer service raises Follow Up Required with the request as its note', () => {
+  const p = plan({ csInstructions: ' Move his next shipment out a week. ' })
+  assert.deepEqual(p.addFlagIds, [FLAG.followUpRequired])
+  assert.deepEqual(p.flagNotes, { [FLAG.followUpRequired]: 'Move his next shipment out a week.' })
 })
 
-test('a dose change is a request of customer service too, since somebody has to update the prescription', () => {
-  const p = plan({
-    doseChanges: [
-      { medicationId: 7, medication: 'Anastrozole', from: '1mg', value: '0.5mg', sig: '' },
-    ],
-  })
-  assert.ok(p.csAction)
-  assert.match(p.csAction!.description, /Dose change — Anastrozole: 1mg → 0\.5mg\./)
+test('a dose change raises Follow Up Required and Dose Change, with the instruction on Dose Change', () => {
+  const p = plan({ doseChanges: [ANASTROZOLE] })
+  assert.deepEqual(p.addFlagIds, [FLAG.followUpRequired, FLAG.doseChange])
+  assert.equal(p.flagNotes[FLAG.followUpRequired], 'Dose change — see the Dose Change flag.')
+  assert.match(p.flagNotes[FLAG.doseChange]!, /Dose change — Anastrozole: 1mg → 0\.5mg\./)
+  assert.match(p.flagNotes[FLAG.doseChange]!, /Update the prescription and the next shipment\./)
   assert.ok(p.note.includes('Dose change: Anastrozole — 0.5mg (was 1mg)'))
 })
 
-test('follow-up sets the Follow Up Required flag; otherwise no flag is touched', () => {
-  assert.deepEqual(plan({ followUp: true }).addFlagIds, [2])
-  assert.deepEqual(plan({ followUp: false }).addFlagIds, [])
+test('with a dose change and a request, Follow Up Required carries the request', () => {
+  const p = plan({ doseChanges: [ANASTROZOLE], csInstructions: 'Call him about the timing.' })
+  assert.deepEqual(p.addFlagIds, [FLAG.followUpRequired, FLAG.doseChange])
+  assert.equal(p.flagNotes[FLAG.followUpRequired], 'Call him about the timing.')
+})
+
+test('labs and a consultation reach the patient directly and raise no flag', () => {
+  const p = plan({
+    labOrders: [
+      {
+        providerId: 'lp1',
+        timing: 'now',
+        customDate: '',
+        testCodes: ['CBC'],
+        requiredCodes: [],
+        diagnosisCodes: [],
+        compedCodes: [],
+      },
+    ],
+    consultation: { eventTypeId: 'x', message: '', bookingUrl: '', expiresAt: null },
+  })
+  assert.deepEqual(p.addFlagIds, [])
+})
+
+test('an old draft with the retired follow-up switch parses without it', () => {
+  assert.equal('followUp' in parseAnswerDraft({ patientMessage: 'hi', followUp: true }), false)
 })
 
 test('labs and a consultation are listed on the note so the chart says they went out', () => {

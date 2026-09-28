@@ -286,23 +286,6 @@ export function AnswerModal({
                   />
                 </Sub>
 
-                <Sub title="Follow-up">
-                  <label className="flex cursor-pointer items-start gap-2.5 text-[13px]">
-                    <input
-                      type="checkbox"
-                      checked={draft.followUp}
-                      onChange={(e) => update({ followUp: e.target.checked })}
-                      className="mt-0.5 size-3.5 accent-violet-700"
-                    />
-                    <span>
-                      <span className="block font-medium">Follow Up Required</span>
-                      <span className="block text-xs text-muted-foreground">
-                        Raises the flag on the chart so this patient is looked at again.
-                      </span>
-                    </span>
-                  </label>
-                </Sub>
-
                 <Sub
                   title="Ask customer service"
                   action={
@@ -317,10 +300,22 @@ export function AnswerModal({
                   <Label htmlFor="answer-cs" className="sr-only">
                     Instructions for customer service
                   </Label>
+                  <div id="answer-cs-hint" className="mb-2 flex flex-col gap-1 text-xs text-muted-foreground">
+                    <p className="font-medium text-foreground">
+                      Only for something customer service has to follow up on. Anything
+                      written here flags the patient Follow Up Required for CS.
+                    </p>
+                    <p>
+                      Tell the patient yourself in the message above; do not ask CS to pass
+                      an answer on.
+                    </p>
+                    <p>Dose changes are flagged for CS automatically.</p>
+                  </div>
                   <DictationTextarea
                     id="answer-cs"
                     rows={3}
-                    placeholder="Anything CS should handle — shipment change, scheduling, outreach. Leaves an Open Action for them."
+                    aria-describedby="answer-cs-hint"
+                    placeholder="e.g. Move his next shipment out a week."
                     value={draft.csInstructions}
                     onValueChange={(csInstructions) => update({ csInstructions })}
                   />
@@ -382,7 +377,6 @@ function isToolkitEmpty(draft: AnswerDraft): boolean {
     draft.doseChanges.length === 0 &&
     draft.labOrders.length === 0 &&
     draft.consultation === null &&
-    !draft.followUp &&
     !draft.csInstructions.trim()
   )
 }

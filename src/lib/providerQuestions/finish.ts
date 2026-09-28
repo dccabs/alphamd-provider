@@ -100,9 +100,12 @@ export type FinishPlan = {
   note: string
   /** Structured facts the AI chart summary is written from. */
   events: string
-  /** The Open Action for customer service, or null when nothing was asked. */
-  csAction: { title: string; description: string } | null
+  /**
+   * Patient Flags for customer service, with what to do on each flag's note. A
+   * Provider Question never creates an Action, the same as a Lab Review.
+   */
   addFlagIds: number[]
+  flagNotes: Partial<Record<number, string>>
   /** One line for the pile's Finished tab. */
   resolution: string
 }
@@ -118,17 +121,43 @@ function actionLines(draft: AnswerDraft): string[] {
 }
 
 /**
- * The block customer service reads. A dose change leads it whether or not the
- * provider typed anything: somebody downstream has to update the prescription,
- * and this is where they read what to do. Empty when nobody has to act.
+ * The block customer service reads, for the audit events. A dose change leads it
+ * whether or not the provider typed anything: somebody downstream has to update
+ * the prescription. Empty when nobody has to act.
  */
 function customerServiceBlock(draft: AnswerDraft): string {
-  const changes = recordedChanges(draft)
-    .map(doseChangeLines)
-    .filter((c) => c !== null)
-  return [...changes.map((c) => c.cs), draft.csInstructions.trim() || null]
+  return [...doseChangeCsLines(draft), draft.csInstructions.trim() || null]
     .filter(Boolean)
     .join('\n')
+}
+
+function doseChangeCsLines(draft: AnswerDraft): string[] {
+  return recordedChanges(draft)
+    .map(doseChangeLines)
+    .filter((c) => c !== null)
+    .map((c) => c.cs)
+}
+
+/**
+ * Follow Up Required means CS has something to do, and its note says what; a
+ * dose change adds Dose Change with the instruction. Labs, a consultation or the
+ * answer alone reach the Patient directly. Same rule as `planCompletion`.
+ */
+function flagsFor(draft: AnswerDraft): Pick<FinishPlan, 'addFlagIds' | 'flagNotes'> {
+  const addFlagIds: number[] = []
+  const flagNotes: Partial<Record<number, string>> = {}
+  const doseLines = doseChangeCsLines(draft)
+  const request = draft.csInstructions.trim()
+
+  if (doseLines.length || request) {
+    addFlagIds.push(FLAG.followUpRequired)
+    flagNotes[FLAG.followUpRequired] = request || 'Dose change — see the Dose Change flag.'
+  }
+  if (doseLines.length) {
+    addFlagIds.push(FLAG.doseChange)
+    flagNotes[FLAG.doseChange] = doseLines.join('\n')
+  }
+  return { addFlagIds, flagNotes }
 }
 
 export function planFinish(input: {
@@ -153,7 +182,6 @@ export function planFinish(input: {
     `Answer sent to the patient: ${answer}`,
     ...changes.map((c) => c.chart),
     ...actionLines(draft),
-    draft.followUp ? 'Follow Up Required flag set.' : null,
     customerServiceBlock(draft) ? `For customer service: ${customerServiceBlock(draft)}` : null,
   ]
     .filter(Boolean)
@@ -168,15 +196,7 @@ export function planFinish(input: {
     .filter(Boolean)
     .join('\n\n')
 
-  const cs = customerServiceBlock(draft)
-
-  return {
-    note,
-    events,
-    csAction: cs ? { title: 'Provider Question — answered', description: cs } : null,
-    addFlagIds: draft.followUp ? [FLAG.followUpRequired] : [],
-    resolution: resolutionLine(draft),
-  }
+  return { note, events, ...flagsFor(draft), resolution: resolutionLine(draft) }
 }
 
 function resolutionLine(draft: AnswerDraft): string {
@@ -188,7 +208,7 @@ function resolutionLine(draft: AnswerDraft): string {
   }
   if (draft.labOrders.length) return 'Answered; labs ordered'
   if (draft.consultation) return 'Answered; consultation requested'
-  if (draft.followUp) return 'Answered; follow-up required'
+  if (draft.csInstructions.trim()) return 'Answered; customer service asked'
   return 'Answered'
 }
 
@@ -208,7 +228,6 @@ export function describeAnswer(
     if (line) lines.push(line.chart)
   }
   lines.push(...actionLines(draft))
-  if (draft.followUp) lines.push('Follow-up required.')
   if (options.omit !== 'patientMessage' && draft.patientMessage.trim()) {
     lines.push(`Message to the patient: ${draft.patientMessage.trim()}`)
   }

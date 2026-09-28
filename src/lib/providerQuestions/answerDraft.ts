@@ -8,9 +8,9 @@ import type { DoseChange } from '../labReviews/reviewDraft.ts'
  *
  * A cut-down `ReviewDraft`: no disposition (finishing a Provider Question is
  * answering it, and nobody should have to pick "continue protocol" to reply),
- * no new medications or discounts (a protocol is a Lab Review decision), and a
- * `followUp` switch in place of the follow-up disposition. Everything else is
- * the Lab Review toolkit, in the same shapes so the same panels edit it.
+ * and no new medications or discounts (a protocol is a Lab Review decision).
+ * Everything else is the Lab Review toolkit, in the same shapes so the same
+ * panels edit it.
  *
  * Lives in `provider_questions.draft` as jsonb, autosaved as the provider
  * types, so `parseAnswerDraft` reads defensively and never throws.
@@ -21,9 +21,7 @@ export type AnswerDraft = {
   doseChanges: DoseChange[]
   labOrders: LabOrder[]
   consultation: ConsultRequest | null
-  /** Raise the Follow Up Required flag on finish. */
-  followUp: boolean
-  /** Request from CS. Non-empty creates an Open Action. */
+  /** Request of CS. Non-empty raises Follow Up Required with this as its note. */
   csInstructions: string
   /** AI summary of what the provider did, written when Finish opens. */
   chartSummary: string
@@ -37,7 +35,6 @@ export const EMPTY_ANSWER_DRAFT: AnswerDraft = {
   doseChanges: [],
   labOrders: [],
   consultation: null,
-  followUp: false,
   csInstructions: '',
   chartSummary: '',
   questionRecap: '',
@@ -75,7 +72,6 @@ export function parseAnswerDraft(json: unknown): AnswerDraft {
     doseChanges: doseChangesFrom(raw.doseChanges),
     labOrders: parseOrders(raw.labOrders),
     consultation: parseConsultRequest(raw.consultation),
-    followUp: raw.followUp === true,
     csInstructions: str(raw.csInstructions),
     chartSummary: str(raw.chartSummary),
     questionRecap: str(raw.questionRecap),
@@ -94,7 +90,6 @@ export function toolkitItems(draft: AnswerDraft): string[] {
   }
   if (draft.labOrders.length) items.push('labs')
   if (draft.consultation) items.push('a consultation')
-  if (draft.followUp) items.push('follow-up')
   if (draft.csInstructions.trim()) items.push('a request to customer service')
   return items
 }
@@ -105,7 +100,6 @@ export function isAnswerDraftEmpty(draft: AnswerDraft): boolean {
     draft.doseChanges.every((c) => !c.medication.trim() && !c.value.trim()) &&
     draft.labOrders.length === 0 &&
     draft.consultation === null &&
-    !draft.followUp &&
     !draft.csInstructions.trim()
   )
 }

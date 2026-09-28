@@ -31,7 +31,6 @@ test('each toolkit entry is named, in the Answer panel order', () => {
       ],
       labOrders: [EMPTY_ORDER],
       consultation: { eventTypeId: 'x', message: '', bookingUrl: '', expiresAt: null },
-      followUp: true,
       csInstructions: 'Move the shipment a week.',
     })
   )
@@ -39,7 +38,6 @@ test('each toolkit entry is named, in the Answer panel order', () => {
     'a dose change',
     'labs',
     'a consultation',
-    'follow-up',
     'a request to customer service',
   ])
 })

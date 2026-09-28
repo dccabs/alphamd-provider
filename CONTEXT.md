@@ -81,7 +81,7 @@ A label on a Patient that puts them on the admin app's Flagged Patients list for
 _Avoid_: Clinic flag (a highlight on an Analyte), Action, tag, alert
 
 **Action**:
-A task on the admin app's Actions board. A Lab Review never creates one: what customer service has to do after a review is written on a Patient Flag.
+A task on the admin app's Actions board (`actions`). This portal never creates one: what customer service has to do after a Lab Review or a Provider Question is written on a Patient Flag. The dashboard shows the Actions assigned to the Provider; they are worked in the admin app.
 _Avoid_: Task, to-do, ticket, Patient Flag
 
 **Clinic flag**:
@@ -135,7 +135,3 @@ _Avoid_: Mine (as a heading), my queue
 **Consultation**:
 A booked call between a Provider and a Patient, from `user_consultation_schedules`. The dashboard shows the Provider's own for one day at a time, today or later, with a Join link. Consultations are booked and run through the admin app and Calendly; this portal only shows them.
 _Avoid_: Appointment (the admin app's word), meeting, event (the Calendly row)
-
-**Action**:
-A task on the admin app's Actions board (`actions`). This portal creates them when a Provider asks customer service for something, and the dashboard shows the ones assigned to the Provider; they are worked in the admin app.
-_Avoid_: Task, to-do, ticket

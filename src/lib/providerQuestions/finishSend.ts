@@ -6,8 +6,9 @@ import { consultProblems, requestConsultation } from '@/lib/consultations/mutati
 import { labOrderProblems, scheduleLabOrder } from '@/lib/labOrders/mutations'
 import { resolveActor } from '@/lib/labReviews/events'
 import { DEFAULT_REPLY_IDENTITY } from '@/lib/labReviews/replyIdentity'
-import { createCustomerServiceAction } from '@/lib/patients/csAction'
+import { FLAG_LABELS } from '@/lib/labReviews/clinicalIds'
 import { addPatientFlag } from '@/lib/patients/flags'
+import { CLINIC_TIME_ZONE } from '@/lib/protocols/labels'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { createTicket, replyToTicket } from '@/lib/zendesk'
 
@@ -28,7 +29,7 @@ import { loadForMutation, type MutationResult } from './mutations'
  *      the provider sees why. An unanswered question must not read as finished.
  *   2. The row is marked finished. Compare-and-swap on the assignment, as
  *      `completeLabReview` does, so two tabs cannot both finish it.
- *   3. Everything else — chart note, flags, CS action, labs, consultation — is
+ *   3. Everything else — chart note, flags, labs, consultation — is
  *      attempted independently and *reported*, never thrown. The answer has
  *      already gone out, so aborting would only hide what still needs doing by
  *      hand.
@@ -187,28 +188,15 @@ export async function finishProviderQuestion(
   })
   if (noteId === null) warnings.push('the Provider Question Note could not be written to the chart')
 
-  for (const flagId of plan.addFlagIds) {
-    const added = await addPatientFlag(row.patientId, flagId, access.userId)
-    if (!added) warnings.push(`flag ${flagId} could not be added`)
-  }
-
-  let csActionId: string | null = null
-  if (plan.csAction) {
-    const created = await createCustomerServiceAction(access, {
+  warnings.push(
+    ...(await raiseFlags({
+      questionId: id,
       patientId: row.patientId,
-      ...plan.csAction,
-    })
-    if (created.ok) {
-      csActionId = created.actionId
-      const { error } = await admin
-        .from('provider_questions')
-        .update({ cs_action_id: created.actionId })
-        .eq('id', id)
-      if (error) warnings.push('the customer service action is not linked to this question')
-    } else {
-      warnings.push(created.error)
-    }
-  }
+      staffUserId: access.userId,
+      providerName: actor.displayName,
+      plan,
+    }))
+  )
 
   warnings.push(...(await placeOrders(access, id, draft)))
   warnings.push(...(await sendConsult(access, id, draft)))
@@ -226,8 +214,8 @@ export async function finishProviderQuestion(
       zendeskTicketId: delivered.ticketId,
       sentAs: delivered.sentAs,
       noteId,
-      csActionId,
       addedFlagIds: plan.addFlagIds,
+      flagNotes: plan.flagNotes,
       labOrdersPlaced: draft.labOrders.length,
       consultationRequested: draft.consultation?.eventTypeId ?? null,
       sideEffectWarnings: warnings,
@@ -344,6 +332,37 @@ async function deliverAnswer(input: {
     sentAs: created.sentAs,
     warning: warnings.length ? warnings.join('; ') : undefined,
   }
+}
+
+/**
+ * Raise the plan's Patient Flags, each note headed so CS can tell which question
+ * it came from. Nothing is cleared: Follow Up Required and Dose Change are
+ * removed by CS once the note is done, as with a Lab Review.
+ */
+async function raiseFlags(input: {
+  questionId: string
+  patientId: string
+  staffUserId: string
+  providerName: string
+  plan: ReturnType<typeof planFinish>
+}): Promise<string[]> {
+  const warnings: string[] = []
+  const heading = `Provider Question by ${input.providerName}, ${new Date().toLocaleDateString(
+    'en-US',
+    { month: 'short', day: 'numeric', timeZone: CLINIC_TIME_ZONE }
+  )}`
+
+  for (const flagId of input.plan.addFlagIds) {
+    const body = input.plan.flagNotes[flagId]
+    const added = await addPatientFlag(
+      input.patientId,
+      flagId,
+      input.staffUserId,
+      body ? { ref: input.questionId.slice(0, 8), heading, body } : undefined
+    )
+    if (!added) warnings.push(`the "${FLAG_LABELS[flagId] ?? flagId}" flag could not be added`)
+  }
+  return warnings
 }
 
 /**

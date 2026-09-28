@@ -118,10 +118,11 @@ export function FinishQuestionDialog({
     draft.consultation
       ? `The booking link reserved for this question is emailed to ${patientEmail ?? 'the patient'}: ${consultLine(draft.consultation)}`
       : null,
-    ...plan.addFlagIds.map((id) => `Adds the "${FLAG_LABELS[id] ?? id}" flag.`),
-    plan.csAction
-      ? 'An Open Action is created for customer service with the text below.'
-      : 'No customer service action — nothing was asked of CS.',
+    plan.addFlagIds.length
+      ? `Flags the patient for customer service — ${plan.addFlagIds
+          .map((id) => FLAG_LABELS[id] ?? id)
+          .join(' and ')}, shown on Flagged Patients with the notes below.`
+      : 'Nothing for customer service — no flag raised.',
     'Urgent is cleared and the question is marked Finished. It is never reopened; a later message from the patient is a new question.',
   ].filter((line): line is string => Boolean(line))
 
@@ -189,12 +190,14 @@ export function FinishQuestionDialog({
             </p>
           </Card>
 
-          {plan.csAction && (
-            <Card title="For customer service — Open Action">
-              <p className="text-[13px] leading-relaxed whitespace-pre-wrap">
-                {plan.csAction.description}
-              </p>
-            </Card>
+          {plan.addFlagIds.map((id) =>
+            plan.flagNotes[id] ? (
+              <Card key={id} title={`For customer service — ${FLAG_LABELS[id] ?? id} flag`}>
+                <p className="text-[13px] leading-relaxed whitespace-pre-wrap">
+                  {plan.flagNotes[id]}
+                </p>
+              </Card>
+            ) : null
           )}
 
           <Card title="What happens">
