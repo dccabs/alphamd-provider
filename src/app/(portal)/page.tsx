@@ -88,6 +88,7 @@ export default async function DashboardPage({
             <div className="flex min-w-0 flex-col gap-10">
               <section aria-labelledby="lab-reviews-heading">
                 <ScopeToggle
+                  seeAllHref="/lab-reviews"
                   counts={{ all: reviews.length, mine: myReviews.length }}
                   header={
                     <SectionHeading
@@ -124,6 +125,7 @@ export default async function DashboardPage({
 
               <section aria-labelledby="provider-questions-heading">
                 <ScopeToggle
+                  seeAllHref="/provider-questions"
                   counts={{ all: questions.length, mine: myQuestions.length }}
                   header={
                     <SectionHeading

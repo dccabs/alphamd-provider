@@ -242,7 +242,7 @@ export function AnswerModal({
               <span>
                 Also…{' '}
                 <span className="font-normal text-muted-foreground">
-                  dose change, labs, consultation, follow-up, ask CS
+                  dose change, labs, consultation, ask CS
                 </span>
               </span>
               <span className="text-xs text-muted-foreground">{toolkitOpen ? 'Hide' : 'Show'}</span>
