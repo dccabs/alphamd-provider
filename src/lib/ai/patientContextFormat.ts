@@ -17,6 +17,9 @@ export type PatientContext = {
   /** The lab review's AI summary. Absent from the ported original, which was
    *  built for customer service and had no reason to know what the labs said. */
   labSummary: string | null
+  /** The Provider Question being answered, in place of a lab report. The CS
+   *  comments are staff context for the provider, not the patient's words. */
+  question: { question: string; csComments: string | null } | null
   messages: ContextRow[]
   notes: ContextRow[]
   subscriptions: ContextRow[]
@@ -28,6 +31,7 @@ export type PatientContext = {
 export const EMPTY_CONTEXT: PatientContext = {
   patient: null,
   labSummary: null,
+  question: null,
   messages: [],
   notes: [],
   subscriptions: [],
@@ -67,6 +71,20 @@ export function formatPatientContext(context: PatientContext): string {
         `- State: ${p.state ?? 'N/A'}`,
         `- Registration status: ${p.registration_status ?? 'N/A'}`,
       ].join('\n')
+    )
+  }
+
+  if (context.question) {
+    parts.push(
+      [
+        '## Provider Question (the ask this draft is about)',
+        `### The patient asked\n${clamp(context.question.question, 4000)}`,
+        context.question.csComments?.trim()
+          ? `### Customer service added (staff context, not the patient's words)\n${clamp(context.question.csComments, 2000)}`
+          : null,
+      ]
+        .filter(Boolean)
+        .join('\n\n')
     )
   }
 

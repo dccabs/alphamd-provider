@@ -2,15 +2,17 @@ import 'server-only'
 
 import OpenAI from 'openai'
 
-import { createAdminClient } from '@/lib/supabase/admin'
+import { resolveWorkSubject } from '@/lib/workSubject'
 import { fetchPatientContext, formatPatientContext } from './patientContext.ts'
 import {
   systemPromptFor,
   systemPromptForChartSummary,
   systemPromptForField,
+  systemPromptForQuestionSummary,
   userPromptFor,
   userPromptForChartSummary,
   userPromptForField,
+  userPromptForQuestionSummary,
 } from './prompts.ts'
 import type { ReviewField } from './reviewFields.ts'
 import type { AiTask } from './tasks.ts'
@@ -47,27 +49,38 @@ export type DraftInput = {
 }
 
 /**
- * The patient a review is about.
+ * The patient a review — or a Provider Question — is about.
  *
- * Resolved from the review id server-side rather than accepted from the caller.
+ * Resolved from the work id server-side rather than accepted from the caller.
  * This endpoint reads a patient's entire billing and message history, so taking
  * a patient id from the request body would turn it into a lookup tool for any
  * patient in the database — a far wider grant than the screen it serves.
+ *
+ * A Provider Question has no lab report; the question and the CS comments take
+ * its place in the context, so the draft is about this ask.
  */
-async function subjectOf(
-  reviewId: string
-): Promise<{ patientId: string; reportId: string | null } | null> {
-  const admin = createAdminClient()
-  const { data, error } = await admin
-    .from('lab_reviews')
-    .select('patient_id, report_id')
-    .eq('id', reviewId)
-    .maybeSingle()
-
-  if (error || !data?.patient_id) return null
+async function subjectOf(reviewId: string): Promise<{
+  patientId: string
+  reportId: string | null
+  question: { question: string; csComments: string | null } | null
+} | null> {
+  let work
+  try {
+    work = await resolveWorkSubject(reviewId)
+  } catch (error) {
+    // The route has no catch of its own; a lookup outage should read as
+    // "not found" to the provider but be loud in the logs.
+    console.error('AI draft subject lookup failed', error)
+    return null
+  }
+  if (!work) return null
   return {
-    patientId: data.patient_id as string,
-    reportId: (data.report_id as string | null) ?? null,
+    patientId: work.patientId,
+    reportId: work.reportId,
+    question:
+      work.kind === 'provider_question' && work.question
+        ? { question: work.question, csComments: work.csComments }
+        : null,
   }
 }
 
@@ -84,6 +97,7 @@ export async function streamDraft(input: DraftInput): Promise<DraftStream> {
   if (!subject) return { ok: false, error: 'Could not find this review.' }
 
   const context = await fetchPatientContext(subject.patientId, subject.reportId)
+  if (subject.question) context.question = subject.question
 
   return streamCompletion({
     system: systemPromptFor(input.task, input.identity),
@@ -118,6 +132,30 @@ export type FieldDraftInput = {
  * thing here that is not the provider's own prose, and it goes no further than
  * the salutation of a message they are about to read and approve.
  */
+/**
+ * The sidebar briefing for a Provider Question. Same patient context a Lab
+ * Review summary is written from — messages, notes, subscriptions, charges,
+ * invoices, lab orders — with this question where the lab report would be.
+ */
+export async function streamQuestionSummary(questionId: string): Promise<DraftStream> {
+  if (!aiConfigured()) {
+    return { ok: false, error: 'The AI assistant is not configured in this environment.' }
+  }
+
+  const subject = await subjectOf(questionId)
+  if (!subject?.question) {
+    return { ok: false, error: 'Could not find this Provider Question.' }
+  }
+
+  const context = await fetchPatientContext(subject.patientId, null)
+  context.question = subject.question
+
+  return streamCompletion({
+    system: systemPromptForQuestionSummary(),
+    user: userPromptForQuestionSummary(formatPatientContext(context)),
+  })
+}
+
 /**
  * Summarize what a review did, for the chart, from structured events only.
  *

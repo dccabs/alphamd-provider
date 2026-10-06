@@ -1,8 +1,8 @@
 'use client'
 
-import { useActionState, useMemo, useState } from 'react'
+import { useActionState, useMemo, useState, type ReactNode } from 'react'
 import { useFormStatus } from 'react-dom'
-import { CornerDownLeft, EyeOff, Paperclip, Send } from 'lucide-react'
+import { CornerDownLeft, EyeOff, MessagesSquare, Paperclip, Send } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -60,10 +60,16 @@ export function DetailTabs({
   reviewNotes,
   shownFileId,
   onShowFile,
+  filesHint,
+  activityTitle = TAB_TITLES.activity,
+  aiPanel,
 }: {
   /** Carried down to the reply composer, whose AI assist resolves the patient
-   *  from the review rather than being handed a patient id. */
+   *  from the review rather than being handed a patient id. A Provider Question
+   *  id works here too — see `lib/workSubject.ts`. */
   reviewId: string
+  /** The History tab's heading. A Provider Question is not a review. */
+  activityTitle?: string
   notes: Note[]
   summaryBlocks: Block[]
   summaryGeneratedAt: string | null
@@ -73,6 +79,10 @@ export function DetailTabs({
   reviewNotes: LabReviewNote[]
   shownFileId: number | null
   onShowFile: (file: PatientFile) => void
+  /** Shown above the Files list, replacing the Lab Review's past-lab footer. */
+  filesHint?: string
+  /** Replaces the stored Lab Review summary. A Provider Question writes one live. */
+  aiPanel?: ReactNode
 }) {
   const [tab, setTab] = useState<TabId>('ai')
   const [noteFilter, setNoteFilter] = useState<NoteFilter>('provider')
@@ -142,17 +152,23 @@ export function DetailTabs({
             ))}
           </div>
         ) : (
-          <span className="text-[13px] font-semibold">{TAB_TITLES[tab]}</span>
+          <span className="text-[13px] font-semibold">
+            {tab === 'activity' ? activityTitle : TAB_TITLES[tab]}
+          </span>
         )}
       </div>
 
       <div className="h-[632px] overflow-y-auto xl:h-auto xl:min-h-0 xl:flex-1">
-        {tab === 'ai' && (
-          <AiTab blocks={summaryBlocks} generatedAt={summaryGeneratedAt} />
-        )}
+        {tab === 'ai' &&
+          (aiPanel ?? <AiTab blocks={summaryBlocks} generatedAt={summaryGeneratedAt} />)}
         {tab === 'notes' && <NotesList notes={visibleNotes} filter={noteFilter} />}
         {tab === 'files' && (
-          <FilesList files={files} shownFileId={shownFileId} onShowFile={onShowFile} />
+          <FilesList
+            files={files}
+            shownFileId={shownFileId}
+            onShowFile={onShowFile}
+            hint={filesHint}
+          />
         )}
         {tab === 'messages' && <MessagesList reviewId={reviewId} inbox={cs} />}
         {tab === 'activity' && <ActivityList events={events} reviewNotes={reviewNotes} />}
@@ -227,15 +243,20 @@ function FilesList({
   files,
   shownFileId,
   onShowFile,
+  hint,
 }: {
   files: PatientFile[]
   shownFileId: number | null
   onShowFile: (file: PatientFile) => void
+  hint?: string
 }) {
   if (!files.length) return <EmptyState>No files uploaded for this patient.</EmptyState>
 
   return (
     <div className="flex flex-col">
+      {hint && (
+        <p className="border-b bg-muted/40 px-4 py-2.5 text-xs text-muted-foreground">{hint}</p>
+      )}
       {files.map((file) => {
         const shown = file.id === shownFileId
         return (
@@ -264,9 +285,11 @@ function FilesList({
           </div>
         )
       })}
-      <p className="px-4 py-3 text-xs text-muted-foreground">
-        Viewing a file loads it into the main viewer for quick past-lab comparison.
-      </p>
+      {!hint && (
+        <p className="px-4 py-3 text-xs text-muted-foreground">
+          Viewing a file loads it into the main viewer for quick past-lab comparison.
+        </p>
+      )}
     </div>
   )
 }
@@ -362,11 +385,20 @@ const MESSAGE_ROLE_STYLE: Record<CsMessage['role'], string> = {
   PATIENT: 'border-border bg-muted text-muted-foreground',
 }
 
+/** Who wrote it, as a left edge, so a thread can be scanned for the patient's turns. */
+const MESSAGE_ROLE_EDGE: Record<CsMessage['role'], string> = {
+  PROVIDER: 'border-l-blue-400',
+  STAFF: 'border-l-zinc-300',
+  PATIENT: 'border-l-emerald-400',
+}
+
 function MessagesList({ reviewId, inbox }: { reviewId: string; inbox: CsInbox }) {
   if (!inbox.threads.length) return <EmptyState>No messages for this patient.</EmptyState>
 
+  // Each thread is its own card on a tinted ground: the gap between cards is
+  // what says one conversation has ended and the next begun.
   return (
-    <ul className="flex flex-col">
+    <ul className="flex flex-col gap-3 bg-muted/40 p-3">
       {inbox.threads.map((thread, i) => (
         // The newest thread is the one a provider almost always answers, so its
         // composer is open on arrival and the rest are one click away.
@@ -412,22 +444,42 @@ function MessageThread({
   const optimistic = state.status === 'sent' && state.sentBody ? state.sentBody : null
 
   return (
-    <li className="border-b">
-      <div className="flex items-center gap-2 border-b bg-muted/40 px-4 py-2">
-        <span className="text-[13px] font-semibold">{thread.subject}</span>
-        {thread.unreadCount > 0 && <Badge variant="destructive">{thread.unreadCount} new</Badge>}
-        <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-          {shortDate(thread.lastActivityAt)}
-        </span>
+    <li
+      className={[
+        'overflow-hidden rounded-lg border bg-card shadow-xs',
+        thread.unreadCount > 0 ? 'border-red-200 ring-1 ring-red-100' : '',
+      ].join(' ')}
+    >
+      <div className="flex items-start gap-2.5 border-b bg-muted/60 px-3.5 py-2.5">
+        <MessagesSquare className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start gap-2">
+            <span className="min-w-0 flex-1 text-[13px] leading-snug font-semibold">
+              {thread.subject}
+            </span>
+            {thread.unreadCount > 0 && (
+              <Badge variant="destructive" className="shrink-0">
+                {thread.unreadCount} new
+              </Badge>
+            )}
+          </div>
+          <div className="mt-0.5 text-[11px] text-muted-foreground">
+            Ticket #{thread.ticketId} · {thread.messages.length} message
+            {thread.messages.length === 1 ? '' : 's'} · Last activity{' '}
+            {shortDate(thread.lastActivityAt)}
+          </div>
+        </div>
       </div>
 
-      <div className="flex flex-col">
+      <div className="flex flex-col divide-y">
         {thread.messages.map((message) => (
           <MessageRow key={message.id} message={message} />
         ))}
 
         {optimistic && (
-          <div className="flex flex-col gap-1.5 px-4 py-3">
+          <div
+            className={`flex flex-col gap-1.5 border-l-2 px-4 py-3 ${MESSAGE_ROLE_EDGE.PROVIDER}`}
+          >
             <div className="flex items-center gap-2">
               <span className="text-[13px] font-semibold">You</span>
               <span
@@ -460,7 +512,7 @@ function MessageThread({
       )}
 
       {composing ? (
-        <form action={formAction} className="flex flex-col gap-2 px-4 py-3">
+        <form action={formAction} className="flex flex-col gap-2 border-t bg-muted/30 px-4 py-3">
           <input type="hidden" name="ticketId" value={thread.ticketId} />
           <label className="flex items-center gap-2 text-xs text-muted-foreground">
             Send
@@ -500,7 +552,7 @@ function MessageThread({
           </div>
         </form>
       ) : (
-        <div className="px-4 py-2">
+        <div className="border-t bg-muted/30 px-2.5 py-1.5">
           <Button type="button" variant="ghost" size="sm" onClick={() => setComposing(true)}>
             <CornerDownLeft />
             Reply
@@ -515,7 +567,8 @@ function MessageRow({ message }: { message: CsMessage }) {
   return (
     <div
       className={[
-        'flex flex-col gap-1.5 px-4 py-3',
+        'flex flex-col gap-1.5 border-l-2 px-4 py-3',
+        MESSAGE_ROLE_EDGE[message.role],
         // 22% of mirrored comments are internal staff notes the patient never
         // saw. Letting them read as sent messages would be actively misleading
         // on a clinical screen.

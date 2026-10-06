@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { ChevronLeft, ChevronRight, Download, FileText } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Download, FileText, X } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { downloadFileName, fileTypeName, isUnrenderableImage } from '@/lib/labReviews/files'
@@ -84,6 +84,8 @@ export function DocumentViewer(props: {
   file: PatientFile | null
   signedUrl: string | null
   error: string | null
+  /** Adds a Close button, for screens where the viewer is opened on demand. */
+  onClose?: () => void
 }) {
   // Keyed on the file so a different document starts at page 1 and 100% zoom.
   // Remounting is the idiomatic reset — resetting inside an effect would cause
@@ -95,10 +97,12 @@ function ViewerFrame({
   file,
   signedUrl,
   error,
+  onClose,
 }: {
   file: PatientFile | null
   signedUrl: string | null
   error: string | null
+  onClose?: () => void
 }) {
   const [zoom, setZoom] = useState(100)
   const [page, setPage] = useState(1)
@@ -185,6 +189,13 @@ function ViewerFrame({
             >
               <Download />
               Download
+            </Button>
+          )}
+
+          {onClose && (
+            <Button variant="ghost" size="sm" onClick={onClose}>
+              <X />
+              Close
             </Button>
           )}
         </div>

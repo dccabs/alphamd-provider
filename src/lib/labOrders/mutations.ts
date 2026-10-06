@@ -2,7 +2,8 @@ import 'server-only'
 
 import type { ProviderAccess } from '@/lib/authz'
 import { createAdminClient } from '@/lib/supabase/admin'
-import { logLabReviewEvent, resolveActor } from '@/lib/labReviews/events'
+import { resolveActor } from '@/lib/labReviews/events'
+import { logWorkEvent, resolveWorkSubject, workNoun, type WorkSubject } from '@/lib/workSubject'
 import {
   diagnosisPayload,
   orderNote,
@@ -51,28 +52,11 @@ export type OrderResult =
  */
 const BLOCKED_PATIENT_STATUSES = [10, 23]
 
-type ReviewSubject = {
-  patientId: string
-  status: string
-  assignedTo: string | null
-}
-
-async function loadReview(reviewId: string): Promise<ReviewSubject | null> {
-  const admin = createAdminClient()
-
-  const { data, error } = await admin
-    .from('lab_reviews')
-    .select('patient_id, status, assigned_to')
-    .eq('id', reviewId)
-    .maybeSingle()
-  if (error) throw new Error(`lab_reviews lookup failed: ${error.message}`)
-  if (!data?.patient_id) return null
-
-  return {
-    patientId: data.patient_id as string,
-    status: data.status as string,
-    assignedTo: (data.assigned_to as string | null) ?? null,
-  }
+/** The Lab Review or Provider Question this order hangs off — see `workSubject.ts`.
+ *  `reviewId` is kept as the parameter name for the many callers that only ever
+ *  pass a Lab Review. */
+async function loadReview(reviewId: string): Promise<WorkSubject | null> {
+  return resolveWorkSubject(reviewId)
 }
 
 async function patientFor(patientId: string): Promise<{ status: number | null; state: string | null }> {
@@ -133,7 +117,7 @@ export async function scheduleLabOrder(
   order: LabOrder
 ): Promise<OrderResult> {
   const review = await loadReview(reviewId)
-  if (!review) return { ok: false, error: 'This review no longer exists.' }
+  if (!review) return { ok: false, error: 'This review or question no longer exists.' }
 
   const patient = await patientFor(review.patientId)
 
@@ -149,6 +133,23 @@ export async function scheduleLabOrder(
 
   const immediate = order.timing === 'now'
   const admin = createAdminClient()
+
+  // A draft saved before a provider was retired still carries their id.
+  const { data: provider, error: providerError } = await admin
+    .from('lab_providers')
+    .select('id')
+    .eq('id', order.providerId)
+    .eq('is_active', true)
+    .maybeSingle()
+  if (providerError) {
+    return { ok: false, error: `Could not check the ordering provider: ${providerError.message}` }
+  }
+  if (!provider) {
+    return {
+      ok: false,
+      error: 'That ordering provider is no longer active. Choose another provider.',
+    }
+  }
 
   const { data: inserted, error } = await admin
     .from('scheduled_lab_requisitions')
@@ -182,8 +183,7 @@ export async function scheduleLabOrder(
   await bumpOnboardingStatus(review.patientId)
 
   const actor = await resolveActor(access)
-  const logged = await logLabReviewEvent({
-    labReviewId: reviewId,
+  const logged = await logWorkEvent(review, {
     eventType: 'labs_ordered',
     actor,
     summary: orderSummary(order, scheduledDate, immediate),
@@ -196,7 +196,7 @@ export async function scheduleLabOrder(
       compedCodes: order.compedCodes,
     },
   })
-  if (!logged.ok) warnings.push("it is not in the review's history")
+  if (!logged.ok) warnings.push(`it is not in the ${workNoun(review.kind)}'s history`)
 
   return {
     ok: true,
@@ -222,7 +222,7 @@ export async function cancelScheduledLabOrder(
   scheduledId: string
 ): Promise<{ ok: true; warning?: string } | { ok: false; error: string }> {
   const review = await loadReview(reviewId)
-  if (!review) return { ok: false, error: 'This review no longer exists.' }
+  if (!review) return { ok: false, error: 'This review or question no longer exists.' }
 
   const admin = createAdminClient()
 
@@ -246,8 +246,7 @@ export async function cancelScheduledLabOrder(
   }
 
   const actor = await resolveActor(access)
-  const logged = await logLabReviewEvent({
-    labReviewId: reviewId,
+  const logged = await logWorkEvent(review, {
     eventType: 'labs_order_cancelled',
     actor,
     summary: 'Cancelled a scheduled lab order',
@@ -261,7 +260,7 @@ export async function cancelScheduledLabOrder(
     ok: true,
     warning: logged.ok
       ? undefined
-      : "The order was cancelled, but it is not in the review's history. Tell an administrator.",
+      : `The order was cancelled, but it is not in the ${workNoun(review.kind)}'s history. Tell an administrator.`,
   }
 }
 

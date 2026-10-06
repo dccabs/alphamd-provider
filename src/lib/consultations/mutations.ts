@@ -5,7 +5,8 @@ import { createSingleUseSchedulingLink } from '@/lib/calendly'
 import { greetingName } from '@/lib/patientName'
 import { sendPauboxEmail } from '@/lib/paubox'
 import { createAdminClient } from '@/lib/supabase/admin'
-import { logLabReviewEvent, resolveActor } from '@/lib/labReviews/events'
+import { resolveActor } from '@/lib/labReviews/events'
+import { logWorkEvent, resolveWorkSubject, workNoun, type WorkKind } from '@/lib/workSubject'
 import { eventTypeById } from './eventTypes.ts'
 import { INVITE_FROM, consultationInvite } from './inviteEmail.ts'
 import { renderConsultationInviteHtml } from './inviteEmailHtml'
@@ -47,23 +48,19 @@ type Subject = {
   email: string | null
   gender: string | null
   statusId: number | null
+  /** Which work row asked — a Lab Review or a Provider Question. */
+  work: WorkKind
 }
 
+/** The patient behind a Lab Review or Provider Question id — see `workSubject.ts`. */
 async function subjectOf(reviewId: string): Promise<Subject | null> {
-  const admin = createAdminClient()
+  const work = await resolveWorkSubject(reviewId)
+  if (!work) return null
 
-  const { data: review, error: reviewError } = await admin
-    .from('lab_reviews')
-    .select('patient_id')
-    .eq('id', reviewId)
-    .maybeSingle()
-  if (reviewError) throw new Error(`lab_reviews lookup failed: ${reviewError.message}`)
-  if (!review?.patient_id) return null
-
-  return subjectFor(review.patient_id as string)
+  return { ...(await subjectFor(work.patientId)), work: work.kind }
 }
 
-async function subjectFor(patientId: string): Promise<Subject> {
+async function subjectFor(patientId: string): Promise<Omit<Subject, 'work'>> {
   const admin = createAdminClient()
 
   const { data, error } = await admin
@@ -143,7 +140,7 @@ export async function mintConsultLink(reviewId: string, eventTypeId: string): Pr
   if (!eventType) return { ok: false, error: 'Choose a consultation type.' }
 
   const subject = await subjectOf(reviewId)
-  if (!subject) return { ok: false, error: 'This review no longer exists.' }
+  if (!subject) return { ok: false, error: 'This review or question no longer exists.' }
   if (!subject.email) return { ok: false, error: NO_EMAIL }
 
   const link = await createSingleUseSchedulingLink({
@@ -167,7 +164,7 @@ export async function requestConsultation(
   if (!eventType) return { ok: false, error: 'Choose a consultation type.' }
 
   const subject = await subjectOf(reviewId)
-  if (!subject) return { ok: false, error: 'This review no longer exists.' }
+  if (!subject) return { ok: false, error: 'This review or question no longer exists.' }
 
   // The address is read from the chart, not accepted from the request. It decides
   // where a message naming this patient's care is delivered, and the booking
@@ -215,19 +212,21 @@ export async function requestConsultation(
   if (noteError) warnings.push('it is not on the chart')
 
   const actor = await resolveActor(access)
-  const logged = await logLabReviewEvent({
-    labReviewId: reviewId,
-    eventType: 'consultation_requested',
-    actor,
-    summary: `Sent a booking link for ${eventType.name}`,
-    metadata: {
-      eventTypeId: eventType.id,
-      eventTypeName: eventType.name,
-      sentTo: subject.email,
-      mintedAtApproval: bookingUrl.minted,
-    },
-  })
-  if (!logged.ok) warnings.push("it is not in the review's history")
+  const logged = await logWorkEvent(
+    { kind: subject.work, id: reviewId },
+    {
+      eventType: 'consultation_requested',
+      actor,
+      summary: `Sent a booking link for ${eventType.name}`,
+      metadata: {
+        eventTypeId: eventType.id,
+        eventTypeName: eventType.name,
+        sentTo: subject.email,
+        mintedAtApproval: bookingUrl.minted,
+      },
+    }
+  )
+  if (!logged.ok) warnings.push(`it is not in the ${workNoun(subject.work)}'s history`)
 
   return {
     ok: true,

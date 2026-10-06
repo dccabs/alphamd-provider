@@ -45,6 +45,18 @@ describe('formatPatientContext', () => {
     assert.match(formatPatientContext(context({ labSummary: 'Hct 54%' })), /Hct 54%/)
   })
 
+  it('puts a Provider Question in place of the lab report, marking CS comments as staff context', () => {
+    const rendered = formatPatientContext(
+      context({
+        question: { question: 'Can I split my dose?', csComments: 'Patient sounded anxious.' },
+      })
+    )
+    assert.match(rendered, /## Provider Question/)
+    assert.match(rendered, /The patient asked\nCan I split my dose\?/)
+    assert.match(rendered, /staff context, not the patient's words\)\nPatient sounded anxious\./)
+    assert.doesNotMatch(rendered, /Lab review summary/)
+  })
+
   it('truncates long content instead of blowing the prompt budget', () => {
     const rendered = formatPatientContext(
       context({ messages: [{ message: 'x'.repeat(900), created_at: '2026-03-01T00:00:00Z' }] })

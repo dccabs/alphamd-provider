@@ -1,11 +1,11 @@
 # Provider Portal
 
-The clinical surface where a Provider reviews a Patient's labs and records a Disposition.
+The clinical surface where a Provider reviews a Patient's labs and records a Disposition, or answers a Provider Question.
 
 ## Language
 
 **Patient**:
-A person under AlphaMD's care. In this portal they are the subject of a Lab Review, not the person signed in.
+A person under AlphaMD's care. In this portal they are the subject of a Lab Review or a Provider Question, not the person signed in.
 _Avoid_: User, account, customer, client
 
 **Provider**:
@@ -81,9 +81,57 @@ A label on a Patient that puts them on the admin app's Flagged Patients list for
 _Avoid_: Clinic flag (a highlight on an Analyte), Action, tag, alert
 
 **Action**:
-A task on the admin app's Actions board. A Lab Review never creates one: what customer service has to do after a review is written on a Patient Flag.
+A task on the admin app's Actions board (`actions`). This portal never creates one: what customer service has to do after a Lab Review or a Provider Question is written on a Patient Flag. The dashboard shows the Actions assigned to the Provider; they are worked in the admin app.
 _Avoid_: Task, to-do, ticket, Patient Flag
 
 **Clinic flag**:
 A yellow or red highlight on an Analyte when its value crosses an AlphaMD threshold. A prompt for the Provider to look, not a Disposition.
 _Avoid_: Needs attention, abnormal, high, alert, reference range
+
+## Provider Questions
+
+The portal's second work type. The full glossary lives in `alphamd/CONTEXT.md` → Provider Questions; these are the terms this repo's code uses.
+
+**Provider Question**:
+The provider-queue row for a patient medical question. Sibling of Lab Review. A patient may have many at once.
+_Avoid_: Slack medical question, ticket (when you mean the work row)
+
+**Pile**:
+The list of Open Provider Questions in this portal. Queued rows and rows another Provider has, Urgent first then oldest first.
+_Avoid_: queue (that word is the Lab Review list), inbox
+
+**Question Assignee**:
+The Working Provider who currently has the Provider Question. Any Provider may take it onto themselves, from queued or from someone else's in progress. Only the Question Assignee finishes it.
+_Avoid_: original provider, prescribing provider (a different person shown on the row), Mine (the dashboard count of rows where I am Question Assignee)
+
+**Urgent**:
+A flag on a Provider Question. CS may set it at create; any Provider may turn it on or off. Finishing clears it.
+_Avoid_: priority, high, Lab Review (this flag is not on Lab Reviews)
+
+**Aged**:
+An Open Provider Question whose create date is more than two weekdays ago. A visible mark only: no page, no auto-assign.
+_Avoid_: past due, SLA, Lab Review
+
+**Answer**:
+The patient message that finishes a Provider Question. Required; there is no Disposition. The optional toolkit around it (dose change, labs, consultation, follow-up, request from CS) is the Lab Review's.
+_Avoid_: Disposition, reply (when you mean the whole finish)
+
+**Provider Question Note**:
+The chart note written when a Provider Question is finished. AI summarizes what the Provider did. Staff open the Finished row from it in the admin app; the patient never sees it.
+_Avoid_: Lab Review finish note, patient Zendesk message
+
+**Provider Question Attachment**:
+A file customer service added to the question for the Provider: an upload, or a link to an attachment on the Zendesk ticket. Marked with where it came from. Never sent to the patient with the Answer.
+_Avoid_: patient file, lab document
+
+## Dashboard
+
+The landing page after sign-in. Three things in priority order — Lab reviews, Provider Questions, Consultations — plus the Provider's Actions.
+
+**Assigned to me**:
+The dashboard's switch on a work list: the rows where the signed-in Provider is the assignee, against **All**, the whole queue or pile. A switch over the same list, not a separate list.
+_Avoid_: Mine (as a heading), my queue
+
+**Consultation**:
+A booked call between a Provider and a Patient, from `user_consultation_schedules`. The dashboard shows the Provider's own for one day at a time, today or later, with a Join link. Consultations are booked and run through the admin app and Calendly; this portal only shows them.
+_Avoid_: Appointment (the admin app's word), meeting, event (the Calendly row)

@@ -1,5 +1,11 @@
 import { checkProviderAccess } from '@/lib/authz'
-import { streamChartSummary, streamDraft, streamFieldDraft, type DraftStream } from '@/lib/ai/draft'
+import {
+  streamChartSummary,
+  streamDraft,
+  streamFieldDraft,
+  streamQuestionSummary,
+  type DraftStream,
+} from '@/lib/ai/draft'
 import { isReviewField } from '@/lib/ai/reviewFields'
 import { isAiTask } from '@/lib/ai/tasks'
 import { isReplyIdentity } from '@/lib/labReviews/replyIdentity'
@@ -46,6 +52,10 @@ export async function POST(request: Request) {
 
   if (input.kind === 'chartSummary') {
     result = await streamChartSummary(text('events'))
+  } else if (input.kind === 'questionSummary') {
+    const questionId = text('reviewId')
+    if (!questionId) return new Response('Missing question.', { status: 400 })
+    result = await streamQuestionSummary(questionId)
   } else if (isReviewField(input.field)) {
     result = await streamFieldDraft({
       field: input.field,
