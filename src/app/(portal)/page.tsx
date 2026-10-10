@@ -2,12 +2,14 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { ChevronRight } from 'lucide-react'
 
-import { checkProviderAccess } from '@/lib/authz'
+import { checkProviderAccess, contentReviewerBioSlug } from '@/lib/authz'
 import { listMyOpenActions } from '@/lib/actions/queries'
+import { listContentReviews, type ContentReviewRow } from '@/lib/contentReviews/queries'
 import { parseDayKey } from '@/lib/consultations/day'
 import { listProviderConsultations } from '@/lib/consultations/providerDay'
 import { listLabReviews } from '@/lib/labReviews/queries'
 import { listOpenProviderQuestions } from '@/lib/providerQuestions/queries'
+import { ContentReviewList } from '@/components/content-review-list'
 import { PortalChrome } from '@/components/portal-chrome'
 import { QuestionList } from '@/components/question-list'
 import { QueueList } from '@/components/queue-list'
@@ -29,7 +31,8 @@ const ROWS = 3
  * Provider Questions, and today's Consultations — plus any Actions assigned to
  * them. The two work lists each switch between the whole queue and what is
  * assigned to the viewer; consultations and actions sit in a rail because
- * neither is worked in this portal yet.
+ * neither is worked in this portal yet. Content reviewers also see the
+ * Content Review queue, below the two clinical lists.
  *
  * The lists are the same `listLabReviews` / `listOpenProviderQuestions` the
  * queue pages use, deliberately, so the dashboard can never disagree with the
@@ -58,13 +61,15 @@ export default async function DashboardPage({
   const dayParam = parseDayKey(day)
   const { userId, email } = access.access
 
-  const [active, needsAttention, questions, consultations, actions] = await Promise.all([
-    listLabReviews('active'),
-    listLabReviews('needs_attention'),
-    listOpenProviderQuestions(),
-    listProviderConsultations(userId, dayParam),
-    listMyOpenActions(userId),
-  ])
+  const [active, needsAttention, questions, consultations, actions, contentReviews] =
+    await Promise.all([
+      listLabReviews('active'),
+      listLabReviews('needs_attention'),
+      listOpenProviderQuestions(),
+      listProviderConsultations(userId, dayParam),
+      listMyOpenActions(userId),
+      contentReviewQueueFor(userId),
+    ])
 
   const reviews = [...needsAttention, ...active]
   const myReviews = reviews.filter((r) => r.assignedTo === userId)
@@ -157,6 +162,27 @@ export default async function DashboardPage({
                   }
                 />
               </section>
+
+              {contentReviews && (
+                <section aria-labelledby="content-reviews-heading">
+                  <SectionHeading
+                    id="content-reviews-heading"
+                    title="Content Reviews"
+                    count={contentReviews.length}
+                    note={null}
+                  />
+                  <div className="mt-3">
+                    <Capped
+                      total={contentReviews.length}
+                      href="/content-reviews"
+                      noun="content review"
+                      empty="Nothing waiting. Site pages appear here when they need a medical review."
+                    >
+                      <ContentReviewList reviews={contentReviews.slice(0, ROWS)} viewerId={userId} />
+                    </Capped>
+                  </div>
+                </section>
+              )}
             </div>
 
             <aside className="flex flex-col gap-6 lg:sticky lg:top-6 lg:self-start">
@@ -227,6 +253,20 @@ function Capped({
       )}
     </>
   )
+}
+
+/**
+ * The Content Review queue for a content reviewer; null for everyone else.
+ * A failure here hides the section rather than the dashboard: it is the newest
+ * and least critical of the work lists.
+ */
+async function contentReviewQueueFor(userId: string): Promise<ContentReviewRow[] | null> {
+  try {
+    if (!(await contentReviewerBioSlug(userId))) return null
+    return (await listContentReviews()).queue
+  } catch {
+    return null
+  }
 }
 
 function plural(n: number, noun: string): string {

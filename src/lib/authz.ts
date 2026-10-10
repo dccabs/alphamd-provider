@@ -71,6 +71,40 @@ export async function checkProviderAccess(): Promise<AccessResult> {
   }
 }
 
+export type ContentReviewerAccess = ProviderAccess & {
+  /** `providerProfiles` slug in alphamd; the public byline links to it. */
+  bioSlug: string
+}
+
+export type ContentReviewerAccessResult =
+  | { ok: true; access: ContentReviewerAccess }
+  | { ok: false; reason: 'no-session' | 'not-allowed-domain' | 'not-a-provider' | 'not-a-content-reviewer' }
+
+/** The provider's `content_reviewers` bio slug, or null when they are not an active reviewer. */
+export async function contentReviewerBioSlug(userId: string): Promise<string | null> {
+  const { data, error } = await createAdminClient()
+    .from('content_reviewers')
+    .select('bio_slug')
+    .eq('user_id', userId)
+    .eq('active', true)
+    .maybeSingle()
+  if (error) throw new Error(`Could not resolve content reviewer: ${error.message}`)
+  return (data?.bio_slug as string | undefined) ?? null
+}
+
+/**
+ * Content Reviews are limited to providers flagged in `content_reviewers`,
+ * on top of the provider check every portal page makes.
+ */
+export async function checkContentReviewerAccess(): Promise<ContentReviewerAccessResult> {
+  const result = await checkProviderAccess()
+  if (!result.ok) return result
+
+  const bioSlug = await contentReviewerBioSlug(result.access.userId)
+  if (!bioSlug) return { ok: false, reason: 'not-a-content-reviewer' }
+  return { ok: true, access: { ...result.access, bioSlug } }
+}
+
 /** Throwing form, for server actions where a denial is a programming error. */
 export async function requireProviderAccess(): Promise<ProviderAccess> {
   const result = await checkProviderAccess()

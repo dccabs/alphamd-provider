@@ -124,9 +124,37 @@ _Avoid_: Lab Review finish note, patient Zendesk message
 A file customer service added to the question for the Provider: an upload, or a link to an attachment on the Zendesk ticket. Marked with where it came from. Never sent to the patient with the Answer.
 _Avoid_: patient file, lab document
 
+## Content Reviews
+
+Medical review of public site pages (articles, Ask Us Anything answers, treatment pages) before the site credits a reviewer. Rows live in alphamd's `content_reviews`; the pages themselves are read live from Sanity and never written.
+
+**Content Review**:
+One review of one Sanity document at one revision. A re-review is a new row pointing at the one before, so history survives. At most one queued or in-review row per document.
+_Avoid_: Lab Review, article approval (when you mean the row)
+
+**Content Reviewer**:
+A Provider with an active `content_reviewers` row, which maps them to their public bio slug. Only content reviewers see the queue or the rows.
+_Avoid_: editor (the person who changes the page in Sanity), signer
+
+**Reviewed rev**:
+The Sanity `_rev` the Content Reviewer was shown when they approved or requested changes. Recorded on the row and on the event.
+_Avoid_: version, draft
+
+**Stale**:
+An approved Content Review whose page has been published again since (published `_rev` ≠ Reviewed rev). Back in the queue; the approval no longer counts.
+_Avoid_: expired, outdated
+
+**Revised**:
+A changes-requested Content Review whose page has been published again since. Back in the queue for the next look.
+_Avoid_: resubmitted, fixed
+
+**Content Review queue**:
+Queued, in review, Stale and Revised reviews, lowest priority number first. The seeding script sets priority: clinical flags, then treatment pages (TRT first), then kept articles by Google landings.
+_Avoid_: pile (that word is Provider Questions)
+
 ## Dashboard
 
-The landing page after sign-in. Three things in priority order — Lab reviews, Provider Questions, Consultations — plus the Provider's Actions.
+The landing page after sign-in. Three things in priority order — Lab reviews, Provider Questions, Consultations — plus the Provider's Actions. Content Reviewers also get the Content Review queue below Provider Questions.
 
 **Assigned to me**:
 The dashboard's switch on a work list: the rows where the signed-in Provider is the assignee, against **All**, the whole queue or pile. A switch over the same list, not a separate list.
